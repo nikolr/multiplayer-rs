@@ -1,0 +1,11 @@
+[package]
+name = "multiplayer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+iced = { version = "0.13.1", default-features = false, features = ["default"]}
+iced_aw = { version = "0.12.2" }
+rfd = "0.15.3"
+rodio = { version = "0.20.1", features = ["symphonia-all"] }
+smol = "2.0.2"
