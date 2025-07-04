@@ -32,12 +32,14 @@ pub enum MultiplayerPlaylistMessage {
 
 pub struct MultiplayerPlaylist {
     pub tracks: Vec<MultiplayerTrack>,
+    pub current_track: Option<usize>,
 }
 
 impl MultiplayerPlaylist {
     pub fn new() -> Self {
         Self {
             tracks: Vec::new(),
+            current_track: None,
         }
     }
     
@@ -53,6 +55,10 @@ impl MultiplayerPlaylist {
         &self.tracks[index]
     }
     
+    pub fn get_current_track(&self) -> Option<&MultiplayerTrack> {
+        self.current_track.and_then(|index| self.tracks.get(index))
+    }
+    
     pub fn view(&self) -> Element<'_, Message> {
         let multiplayer_track_views: Vec<Element<MultiplayerPlaylistMessage>> = self.tracks.iter().enumerate()
             .map(|(index, track)| {
@@ -62,6 +68,8 @@ impl MultiplayerPlaylist {
                         .on_press(MultiplayerPlaylistMessage::Play(index))
                         .padding(8)
                 ]
+                    .padding(4)
+                    .spacing(2)
                     .into()
             })
             .collect();

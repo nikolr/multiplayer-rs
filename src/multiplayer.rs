@@ -10,11 +10,12 @@ use std::sync::{mpsc, Arc};
 use std::time::Duration;
 use iced::{Application, Element, Fill, Font, Task, Theme};
 use iced::application::Update;
-use iced::widget::{button, center, container, row, column, text, tooltip, vertical_space};
+use iced::widget::{button, center, container, row, column, text, tooltip, vertical_space, Slider, slider, Container};
 use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Easing, Mapping, StartTime, Tween, Value};
 use kira::modulator::tweener::{TweenerBuilder, TweenerHandle};
 use kira::sound::PlaybackPosition;
 use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle};
+use kira::StartTime::Delayed;
 use kira::track::{TrackBuilder, TrackHandle};
 use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
 use sysinfo::{get_current_pid, Pid, ProcessRefreshKind, RefreshKind, System};
@@ -26,7 +27,9 @@ pub enum Message {
     FileOpened(Result<(PathBuf, StaticSoundData), Error>),
     Play,
     SwitchTrack(usize),
-    MultiplayerPlaylist(MultiplayerPlaylistMessage)
+    MultiplayerPlaylist(MultiplayerPlaylistMessage),
+    UpdateSlider(f64),
+    SeekAudio,
 }
 
 #[derive(Debug, Clone)]
@@ -41,9 +44,13 @@ pub struct Multiplayer {
     primary_track_handle: TrackHandle,
     secondary_track_handle: TrackHandle,
     currently_playing_static_sound_handle: Option<StaticSoundHandle>,
+    current_static_sound_data_index: Option<usize>,
     volume_tweener: TweenerHandle,
     playlist: MultiplayerPlaylist,
     playback_position: f64,
+    fade_in_duration: Duration,
+    fade_out_duration: Duration,
+    volume_fade_in_out_duration: Duration,
 }
 
 impl Default for Multiplayer {
@@ -90,7 +97,7 @@ impl Default for Multiplayer {
             mapping: Mapping {
                 input_range: (0.0, 1.0),
                 output_range: (Decibels::SILENCE, Decibels::IDENTITY),
-                easing: Easing::Linear,
+                easing: Easing::InOutPowi(1),
             },
         });
         let mut primary_track = audio_manager.add_sub_track(builder).unwrap();
@@ -102,9 +109,13 @@ impl Default for Multiplayer {
             primary_track_handle: primary_track,
             secondary_track_handle: secondary_track,
             currently_playing_static_sound_handle: None,
+            current_static_sound_data_index: None,
             volume_tweener: tweener,
             playlist: MultiplayerPlaylist::new(),
             playback_position: 0.0,
+            fade_in_duration: Duration::from_millis(600),
+            fade_out_duration: Duration::from_millis(600),
+            volume_fade_in_out_duration: Duration::from_millis(1000),
         }
     }
 }
@@ -153,16 +164,30 @@ impl Multiplayer {
                             }
                         };
 
+                        if self.currently_playing_static_sound_handle.is_some() {
+                            self.currently_playing_static_sound_handle.take().unwrap().stop(Tween {
+                                start_time: StartTime::Immediate,
+                                duration: self.fade_out_duration,
+                                easing: Easing::Linear,
+                            });
+                        }
+
                         let static_sound_data = self.playlist.get_track(id).data
                             .start_position(PlaybackPosition::Seconds(self.playback_position))
-                            .loop_region(..);
-                        
-                        let handle = self.primary_track_handle.play(static_sound_data).unwrap();
+                            .loop_region(..)
+                            .fade_in_tween(Tween {
+                                start_time: StartTime::Immediate,
+                                duration: self.fade_in_duration,
+                                easing: Easing::Linear,
+                            });
+
+                        self.currently_playing_static_sound_handle = Option::from(self.primary_track_handle.play(static_sound_data).unwrap());
+                        self.playlist.current_track = Some(id);
                         self.volume_tweener.set(
                             new_volume,
                             Tween {
                                 start_time: StartTime::Immediate,
-                                duration: Duration::from_secs(1),
+                                duration: self.volume_fade_in_out_duration,
                                 easing: Easing::Linear,
                         });
                     },
@@ -170,7 +195,9 @@ impl Multiplayer {
                 }
 
                 Task::none()
-            }
+            },
+            Message::UpdateSlider(slider_position) => todo!(),
+            Message::SeekAudio => todo!()
         }
     }
 
@@ -191,11 +218,29 @@ impl Multiplayer {
             .padding(2)
             .spacing(4);
 
+        let total_duration = match self.playlist.get_current_track() {
+            Some(track) => track.data.duration(),
+            None => Duration::from_secs(0)
+        };
+        let slider: Container<'_, Message> = container(
+            slider(
+                0.0..=total_duration.as_secs_f64(),
+                self.playback_position,
+                Message::UpdateSlider,
+            )
+                .on_release(Message::SeekAudio)
+                .height(15)
+                .width(600)
+                .default(50)
+        )
+            .width(600);
+        
         column![
             controls,
             vertical_space(),
-            // TODO Figure out how to shove multiplayerplaylist view here
             self.playlist.view(),
+            vertical_space(),
+            slider,
         ]
             .into()
     }
