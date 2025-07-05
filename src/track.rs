@@ -1,3 +1,4 @@
+use iced::Length;
 use crate::multiplayer::Message;
 use iced::widget::{button, column, container, horizontal_space, row, scrollable, slider, text, Column, Container, Row};
 use iced::{Element, Fill};
@@ -106,9 +107,12 @@ impl MultiplayerPlaylist {
             })
             .collect();
         
-        let container: Element<'_, MultiplayerPlaylistMessage> = Container::new(scrollable(
-            Column::with_children(multiplayer_track_views)
-        ))
+        let container: Element<'_, MultiplayerPlaylistMessage> = Container::new(
+            scrollable(
+                Column::with_children(multiplayer_track_views)
+            )
+        )
+            .height(Length::FillPortion(3))
             .padding(10)
             .center_x(Fill)
             .into();
