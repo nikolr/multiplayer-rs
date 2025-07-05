@@ -6,6 +6,7 @@ fn main() -> iced::Result {
         .theme(theme)
         .font(include_bytes!("../../assets/fonts/icons.ttf").as_slice())
         .default_font(Font::MONOSPACE)
+        .subscription(Multiplayer::subscription)
         .run()
 }
 

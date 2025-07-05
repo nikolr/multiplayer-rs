@@ -14,7 +14,7 @@ use iced::widget::{button, center, container, row, column, text, tooltip, vertic
 use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Easing, Mapping, StartTime, Tween, Value};
 use kira::modulator::tweener::{TweenerBuilder, TweenerHandle};
 use kira::sound::PlaybackPosition;
-use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle};
+use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle, StaticSoundSettings};
 use kira::StartTime::Delayed;
 use kira::track::{TrackBuilder, TrackHandle};
 use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
@@ -52,6 +52,7 @@ pub struct Multiplayer {
     fade_in_duration: Duration,
     fade_out_duration: Duration,
     volume_fade_in_out_duration: Duration,
+    audio_seek_dragged: bool,
 }
 
 impl Default for Multiplayer {
@@ -117,15 +118,18 @@ impl Default for Multiplayer {
             fade_in_duration: Duration::from_millis(600),
             fade_out_duration: Duration::from_millis(600),
             volume_fade_in_out_duration: Duration::from_millis(1000),
+            audio_seek_dragged: false,
         }
     }
 }
 
 impl Multiplayer {
 
-    fn subscription(&self) -> Subscription<Message> {
+    pub fn subscription(&self) -> Subscription<Message> {
+        if self.audio_seek_dragged {
+            return Subscription::none()
+        }
         let time = iced::time::every(Duration::from_secs_f64(1.0)).map(|_| Message::UpdateTime);
-        println!("{:?}", time);
         Subscription::from(time)
     }
 
@@ -162,13 +166,19 @@ impl Multiplayer {
             Message::MultiplayerPlaylist(message) => {
                 match message {
                     MultiplayerPlaylistMessage::Play(id) => {
-                        let new_volume = self.playlist.get_track(id).volume;
-                        self.playback_position = match &self.currently_playing_static_sound_handle {
-                            None => {
-                                0.0
-                            }
-                            Some(handle) => {
-                                handle.position()
+                        self.playlist.current_track = Some(id);
+                        let new_volume = match self.playlist.get_current_track() {
+                            None => 1.0,
+                            Some(track) => track.volume,
+                        };
+                        self.playback_position = match self.playlist.get_current_track() {
+                            None => 0.0,
+                            Some(track) => {
+                                if track.data.duration() < Duration::from_secs_f64(self.playback_position) {
+                                    0.0
+                                } else {
+                                    self.playback_position
+                                }
                             }
                         };
 
@@ -179,7 +189,6 @@ impl Multiplayer {
                                 easing: Easing::Linear,
                             });
                         }
-
                         let static_sound_data = self.playlist.get_track(id).data
                             .start_position(PlaybackPosition::Seconds(self.playback_position))
                             .loop_region(..)
@@ -190,7 +199,6 @@ impl Multiplayer {
                             });
 
                         self.currently_playing_static_sound_handle = Option::from(self.primary_track_handle.play(static_sound_data).unwrap());
-                        self.playlist.current_track = Some(id);
                         self.volume_tweener.set(
                             new_volume,
                             Tween {
@@ -205,19 +213,27 @@ impl Multiplayer {
                 Task::none()
             },
             Message::UpdateSlider(slider_position) => {
+                self.audio_seek_dragged = true;
+                println!("Update Slider: {:?}", slider_position);
                 self.playback_position = slider_position;
 
                 Task::none()
             },
             Message::SeekAudio => {
                 if let Some(handle) = self.currently_playing_static_sound_handle.as_mut() {
+                    println!("Seek Audio: {:?}", self.playback_position);
                     handle.seek_to(self.playback_position);
                 }
+                self.audio_seek_dragged = false;
 
                 Task::none()
             },
             Message::UpdateTime => {
-               self.playback_position.add_assign(1.0); 
+                if let Some(handle) = &self.currently_playing_static_sound_handle {
+                    println!("Update Time: {:?}", handle.position());
+                    self.playback_position = handle.position();
+                }
+                
                 Task::none()
             }
         }
