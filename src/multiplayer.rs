@@ -20,7 +20,7 @@ use kira::StartTime::Delayed;
 use kira::track::{TrackBuilder, TrackHandle};
 use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
 use sysinfo::{get_current_pid, Pid, ProcessRefreshKind, RefreshKind, System};
-use crate::track::{MultiplayerPlaylist, MultiplayerPlaylistMessage, MultiplayerTrack};
+use crate::track::{MultiplayerPlaylist, MultiplayerPlaylistMessage, MultiplayerTrack, MultiplayerTrackMessage};
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -29,6 +29,7 @@ pub enum Message {
     Play,
     SwitchTrack(usize),
     MultiplayerPlaylist(MultiplayerPlaylistMessage),
+    MultiplayerTrack(MultiplayerTrackMessage),
     UpdateSlider(f64),
     SeekAudio,
     UpdateTime,
@@ -166,64 +167,126 @@ impl Multiplayer {
 
             Message::MultiplayerPlaylist(message) => {
                 match message {
-                    MultiplayerPlaylistMessage::Play(id) => {
-                        self.playlist.current_track = Some(id);
-                        let new_volume = match self.playlist.get_current_track() {
-                            None => 1.0,
-                            Some(track) => track.volume,
-                        };
-                        self.playback_position = match self.playlist.get_current_track() {
-                            None => 0.0,
-                            Some(track) => {
-                                if track.data.duration() < Duration::from_secs_f64(self.playback_position) {
-                                    0.0
-                                } else {
-                                    self.playback_position
+                    // MultiplayerPlaylistMessage::Play(id) => {
+                    //     self.playlist.current_track = Some(id);
+                    //     let new_volume = match self.playlist.get_current_track() {
+                    //         None => 1.0,
+                    //         Some(track) => track.volume,
+                    //     };
+                    //     self.playback_position = match self.playlist.get_current_track() {
+                    //         None => 0.0,
+                    //         Some(track) => {
+                    //             if track.data.duration() < Duration::from_secs_f64(self.playback_position) {
+                    //                 0.0
+                    //             } else {
+                    //                 self.playback_position
+                    //             }
+                    //         }
+                    //     };
+                    // 
+                    //     if self.currently_playing_static_sound_handle.is_some() {
+                    //         self.currently_playing_static_sound_handle.take().unwrap().stop(Tween {
+                    //             start_time: StartTime::Immediate,
+                    //             duration: self.fade_out_duration,
+                    //             easing: Easing::Linear,
+                    //         });
+                    //     }
+                    //     let static_sound_data = self.playlist.get_track(id).data
+                    //         .start_position(PlaybackPosition::Seconds(self.playback_position))
+                    //         .loop_region(..)
+                    //         .fade_in_tween(Tween {
+                    //             start_time: StartTime::Immediate,
+                    //             duration: self.fade_in_duration,
+                    //             easing: Easing::Linear,
+                    //         });
+                    // 
+                    //     self.currently_playing_static_sound_handle = Option::from(self.primary_track_handle.play(static_sound_data).unwrap());
+                    //     self.volume_tweener.set(
+                    //         new_volume,
+                    //         Tween {
+                    //             start_time: StartTime::Immediate,
+                    //             duration: self.volume_fade_in_out_duration,
+                    //             easing: Easing::Linear,
+                    //     });
+                    // },
+                    // MultiplayerPlaylistMessage::Pause | MultiplayerPlaylistMessage::Stop => todo!(),
+                    // MultiplayerPlaylistMessage::UpdateVolumeSlider(new_volume) => {
+                    //     
+                    // 
+                    // }
+                    // MultiplayerPlaylistMessage::VolumeSliderRelease(index) => {
+                    //     if self.playlist.current_track.is_some_and(|current_track| current_track != index) {
+                    //         return Task::none();
+                    //     };
+                    //     self.volume_tweener.set(
+                    //         self.playlist.get_current_track().unwrap().volume,
+                    //         Tween {
+                    //             start_time: StartTime::Immediate,
+                    //             duration: self.volume_fade_in_out_duration,
+                    //             easing: Easing::Linear,
+                    //         });
+                    // },
+                    MultiplayerPlaylistMessage::MultiplayerTrack(index, message) => {
+                        match message {
+                            MultiplayerTrackMessage::Play => {
+                                self.playlist.current_track = Some(index);
+                                let new_volume = match self.playlist.get_current_track() {
+                                    None => 1.0,
+                                    Some(track) => track.volume,
+                                };
+                                self.playback_position = match self.playlist.get_current_track() {
+                                    None => 0.0,
+                                    Some(track) => {
+                                        if track.data.duration() < Duration::from_secs_f64(self.playback_position) {
+                                            0.0
+                                        } else {
+                                            self.playback_position
+                                        }
+                                    }
+                                };
+
+                                if self.currently_playing_static_sound_handle.is_some() {
+                                    self.currently_playing_static_sound_handle.take().unwrap().stop(Tween {
+                                        start_time: StartTime::Immediate,
+                                        duration: self.fade_out_duration,
+                                        easing: Easing::Linear,
+                                    });
+                                }
+                                let static_sound_data = self.playlist.get_track(index).data
+                                    .start_position(PlaybackPosition::Seconds(self.playback_position))
+                                    .loop_region(..)
+                                    .fade_in_tween(Tween {
+                                        start_time: StartTime::Immediate,
+                                        duration: self.fade_in_duration,
+                                        easing: Easing::Linear,
+                                    });
+
+                                self.currently_playing_static_sound_handle = Option::from(self.primary_track_handle.play(static_sound_data).unwrap());
+                                self.volume_tweener.set(
+                                    new_volume,
+                                    Tween {
+                                        start_time: StartTime::Immediate,
+                                        duration: self.volume_fade_in_out_duration,
+                                        easing: Easing::Linear,
+                                    });
+                            }
+                            MultiplayerTrackMessage::UpdateVolumeSlider(new_volume) => {
+                                self.playlist.tracks[index].volume = new_volume;
+                                if self.playlist.current_track.is_some_and(|current_track| current_track == index) {
+                                    println!("Update Volume Slider since the track is playing: {:?}", new_volume);
+                                    self.volume_tweener.set(
+                                        new_volume,
+                                        Tween {
+                                            start_time: StartTime::Immediate,
+                                            duration: Duration::from_millis(100),
+                                            easing: Easing::Linear,
+                                        });
+                                }
+                                else { 
+                                    println!("Track is not playing, not updating volume slider: {:?}", new_volume);
                                 }
                             }
-                        };
-
-                        if self.currently_playing_static_sound_handle.is_some() {
-                            self.currently_playing_static_sound_handle.take().unwrap().stop(Tween {
-                                start_time: StartTime::Immediate,
-                                duration: self.fade_out_duration,
-                                easing: Easing::Linear,
-                            });
                         }
-                        let static_sound_data = self.playlist.get_track(id).data
-                            .start_position(PlaybackPosition::Seconds(self.playback_position))
-                            .loop_region(..)
-                            .fade_in_tween(Tween {
-                                start_time: StartTime::Immediate,
-                                duration: self.fade_in_duration,
-                                easing: Easing::Linear,
-                            });
-
-                        self.currently_playing_static_sound_handle = Option::from(self.primary_track_handle.play(static_sound_data).unwrap());
-                        self.volume_tweener.set(
-                            new_volume,
-                            Tween {
-                                start_time: StartTime::Immediate,
-                                duration: self.volume_fade_in_out_duration,
-                                easing: Easing::Linear,
-                        });
-                    },
-                    MultiplayerPlaylistMessage::Pause | MultiplayerPlaylistMessage::Stop => todo!(),
-                    MultiplayerPlaylistMessage::UpdateVolumeSlider(new_volume) => {
-                        
-
-                    }
-                    MultiplayerPlaylistMessage::VolumeSliderRelease(index) => {
-                        if self.playlist.current_track.is_some_and(|current_track| current_track != index) {
-                            return Task::none();
-                        };
-                        self.volume_tweener.set(
-                            self.playlist.get_current_track().unwrap().volume,
-                            Tween {
-                                start_time: StartTime::Immediate,
-                                duration: self.volume_fade_in_out_duration,
-                                easing: Easing::Linear,
-                            });
                     }
                 }
 
@@ -252,7 +315,8 @@ impl Multiplayer {
                 }
 
                 Task::none()
-            }
+            },
+            Message::MultiplayerTrack(_) => todo!(),
         }
     }
 
