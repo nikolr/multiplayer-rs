@@ -4,11 +4,11 @@ use std::{error, io, thread};
 use std::ffi::OsStr;
 use std::io::{Cursor, Write};
 use std::net::UdpSocket;
-use std::ops::Mul;
+use std::ops::{AddAssign, Mul};
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
-use iced::{Application, Element, Fill, Font, Task, Theme};
+use iced::{Application, Element, Fill, Font, Subscription, Task, Theme};
 use iced::application::Update;
 use iced::widget::{button, center, container, row, column, text, tooltip, vertical_space, Slider, slider, Container};
 use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Easing, Mapping, StartTime, Tween, Value};
@@ -30,6 +30,7 @@ pub enum Message {
     MultiplayerPlaylist(MultiplayerPlaylistMessage),
     UpdateSlider(f64),
     SeekAudio,
+    UpdateTime,
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +122,13 @@ impl Default for Multiplayer {
 }
 
 impl Multiplayer {
+
+    fn subscription(&self) -> Subscription<Message> {
+        let time = iced::time::every(Duration::from_secs_f64(1.0)).map(|_| Message::UpdateTime);
+        println!("{:?}", time);
+        Subscription::from(time)
+    }
+
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::OpenFile => {
@@ -196,8 +204,22 @@ impl Multiplayer {
 
                 Task::none()
             },
-            Message::UpdateSlider(slider_position) => todo!(),
-            Message::SeekAudio => todo!()
+            Message::UpdateSlider(slider_position) => {
+                self.playback_position = slider_position;
+
+                Task::none()
+            },
+            Message::SeekAudio => {
+                if let Some(handle) = self.currently_playing_static_sound_handle.as_mut() {
+                    handle.seek_to(self.playback_position);
+                }
+
+                Task::none()
+            },
+            Message::UpdateTime => {
+               self.playback_position.add_assign(1.0); 
+                Task::none()
+            }
         }
     }
 
