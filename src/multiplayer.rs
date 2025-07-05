@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 use iced::{Application, Element, Fill, Font, Subscription, Task, Theme};
+use iced::alignment::{Horizontal, Vertical};
 use iced::application::Update;
 use iced::widget::{button, center, container, row, column, text, tooltip, vertical_space, Slider, slider, Container};
 use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Easing, Mapping, StartTime, Tween, Value};
@@ -207,7 +208,23 @@ impl Multiplayer {
                                 easing: Easing::Linear,
                         });
                     },
-                    MultiplayerPlaylistMessage::Pause | MultiplayerPlaylistMessage::Stop => todo!()
+                    MultiplayerPlaylistMessage::Pause | MultiplayerPlaylistMessage::Stop => todo!(),
+                    MultiplayerPlaylistMessage::UpdateVolumeSlider(new_volume) => {
+                        
+
+                    }
+                    MultiplayerPlaylistMessage::VolumeSliderRelease(index) => {
+                        if self.playlist.current_track.is_some_and(|current_track| current_track != index) {
+                            return Task::none();
+                        };
+                        self.volume_tweener.set(
+                            self.playlist.get_current_track().unwrap().volume,
+                            Tween {
+                                start_time: StartTime::Immediate,
+                                duration: self.volume_fade_in_out_duration,
+                                easing: Easing::Linear,
+                            });
+                    }
                 }
 
                 Task::none()
@@ -233,7 +250,7 @@ impl Multiplayer {
                     println!("Update Time: {:?}", handle.position());
                     self.playback_position = handle.position();
                 }
-                
+
                 Task::none()
             }
         }
@@ -260,25 +277,25 @@ impl Multiplayer {
             Some(track) => track.data.duration(),
             None => Duration::from_secs(0)
         };
-        let slider: Container<'_, Message> = container(
+        let seeker_slider: Container<'_, Message> = container(
             slider(
                 0.0..=total_duration.as_secs_f64(),
                 self.playback_position,
                 Message::UpdateSlider,
             )
                 .on_release(Message::SeekAudio)
-                .height(15)
-                .width(600)
-                .default(50)
+                .height(16)
+                .width(Fill)
         )
-            .width(600);
+            .center_x(Fill)
+            .padding([10, 40]);
         
         column![
             controls,
             vertical_space(),
             self.playlist.view(),
             vertical_space(),
-            slider,
+            seeker_slider,
         ]
             .into()
     }
@@ -292,8 +309,8 @@ async fn open_file() -> Result<(PathBuf, StaticSoundData), Error> {
         .await
         .ok_or(Error::DialogClosed)?;
 
-    let static_soud_data = StaticSoundData::from_file(path.path()).unwrap();
-    Ok((path.path().to_owned(), static_soud_data))
+    let static_sound_data = StaticSoundData::from_file(path.path()).unwrap();
+    Ok((path.path().to_owned(), static_sound_data))
 }
 
 fn action<'a, Message: Clone + 'a>(

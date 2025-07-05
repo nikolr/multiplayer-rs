@@ -1,9 +1,13 @@
-use std::collections::{BTreeMap, HashMap};
-use iced::Element;
-use iced::widget::{button, container, row, scrollable, text, Column, Container};
-use kira::sound::PlaybackPosition;
+use iced::{Element, Fill};
+use iced::widget::{row, column, scrollable, Container, button, text, container, slider, Column, Row};
 use kira::sound::static_sound::StaticSoundData;
 use crate::multiplayer::Message;
+
+#[derive(Debug, Clone)]
+pub enum MultiplayerTrackMessage {
+    Play(usize),
+    UpdateVolumeSlider(f64),
+}
 
 pub struct MultiplayerTrack {
     pub path: String,
@@ -21,6 +25,47 @@ impl MultiplayerTrack {
         }
     }
     
+    pub fn view(&self, index: usize) -> Element<MultiplayerTrackMessage> {
+        let audio_slider: Container<MultiplayerTrackMessage> = container(
+            slider(
+                0.0..=1.0,
+                self.volume,
+                MultiplayerTrackMessage::UpdateVolumeSlider,
+            )
+                .height(16)
+                .width(Fill)
+        )
+            .center_x(Fill)
+            .padding([10, 40]);
+
+        let top_row: Row<MultiplayerTrackMessage> = row![
+                        text(format!("{} - {}", index, self.path)),
+                        button("Play")
+                            .on_press(MultiplayerTrackMessage::Play(index))
+                            .padding(8)
+                    ]
+            .padding(4)
+            .spacing(2);
+
+
+        column![
+                        top_row,
+                        audio_slider,
+                ]
+            .into() 
+    }
+    
+    pub fn update(&mut self, message: MultiplayerTrackMessage) {
+        match message {
+            MultiplayerTrackMessage::Play(index) => {
+                
+            }
+            MultiplayerTrackMessage::UpdateVolumeSlider(new_volume) => {
+                
+            }
+        }
+    }
+    
 }
 
 #[derive(Debug, Clone)]
@@ -28,6 +73,8 @@ pub enum MultiplayerPlaylistMessage {
     Play(usize),
     Pause,
     Stop,
+    UpdateVolumeSlider(f64),
+    VolumeSliderRelease(usize),
 }
 
 pub struct MultiplayerPlaylist {
@@ -62,14 +109,33 @@ impl MultiplayerPlaylist {
     pub fn view(&self) -> Element<'_, Message> {
         let multiplayer_track_views: Vec<Element<MultiplayerPlaylistMessage>> = self.tracks.iter().enumerate()
             .map(|(index, track)| {
-                row![
-                    text(format!("{} - {}", index, track.path)),
-                    button("Play")
-                        .on_press(MultiplayerPlaylistMessage::Play(index))
-                        .padding(8)
+                let audio_slider: Container<MultiplayerPlaylistMessage> = container(
+                    slider(
+                        0.0..=1.0,
+                        self.tracks[index].volume,
+                        MultiplayerPlaylistMessage::UpdateVolumeSlider,
+                    )
+                        .on_release(MultiplayerPlaylistMessage::VolumeSliderRelease(index))
+                        .height(16)
+                        .width(Fill)
+                )
+                    .center_x(Fill)
+                    .padding([10, 40]);
+                
+                let top_row: Row<MultiplayerPlaylistMessage> = row![
+                        text(format!("{} - {}", index, track.path)),
+                        button("Play")
+                            .on_press(MultiplayerPlaylistMessage::Play(index))
+                            .padding(8)
+                    ]
+                        .padding(4)
+                        .spacing(2);
+
+
+                    column![
+                        top_row,
+                        audio_slider,
                 ]
-                    .padding(4)
-                    .spacing(2)
                     .into()
             })
             .collect();
