@@ -1,38 +1,29 @@
-use std::collections::{BTreeMap, VecDeque};
-use std::fs::File;
-use std::{error, io, thread};
-use std::ffi::OsStr;
-use std::io::{Cursor, Write};
-use std::net::UdpSocket;
-use std::ops::{AddAssign, Mul};
-use std::path::PathBuf;
-use std::sync::{mpsc, Arc};
-use std::time::Duration;
-use iced::{Application, Element, Fill, Font, Subscription, Task, Theme};
-use iced::alignment::{Horizontal, Vertical};
-use iced::application::Update;
-use iced::widget::{button, center, container, row, column, text, tooltip, vertical_space, Slider, slider, Container};
-use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Easing, Mapping, StartTime, Tween, Value};
-use kira::modulator::tweener::{TweenerBuilder, TweenerHandle};
-use kira::sound::PlaybackPosition;
-use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle, StaticSoundSettings};
-use kira::StartTime::Delayed;
-use kira::track::{TrackBuilder, TrackHandle};
-use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
-use sysinfo::{get_current_pid, Pid, ProcessRefreshKind, RefreshKind, System};
 use crate::track::{MultiplayerPlaylist, MultiplayerPlaylistMessage, MultiplayerTrack, MultiplayerTrackMessage};
+use iced::widget::{button, center, column, container, row, slider, text, tooltip, vertical_space, Container};
+use iced::{Element, Fill, Font, Subscription, Task};
+use kira::modulator::tweener::{TweenerBuilder, TweenerHandle};
+use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle};
+use kira::sound::PlaybackPosition;
+use kira::track::{TrackBuilder, TrackHandle};
+use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Easing, Mapping, StartTime, Tween, Value};
+use std::collections::VecDeque;
+use std::fs::File;
+use std::io::Write;
+use std::path::PathBuf;
+use std::sync::mpsc;
+use std::time::Duration;
+use std::{error, io, thread};
+use sysinfo::{get_current_pid, Pid};
+use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
 
 #[derive(Debug, Clone)]
 pub enum Message {
     OpenFile,
     FileOpened(Result<(PathBuf, StaticSoundData), Error>),
-    Play,
-    SwitchTrack(usize),
     MultiplayerPlaylist(MultiplayerPlaylistMessage),
-    MultiplayerTrack(MultiplayerTrackMessage),
-    UpdateSlider(f64),
-    SeekAudio,
-    UpdateTime,
+    UpdatePlaybackPositionSlider(f64),
+    SeekToPlaybackPosition,
+    TickPlaybackPosition,
 }
 
 #[derive(Debug, Clone)]
@@ -131,7 +122,7 @@ impl Multiplayer {
         if self.audio_seek_dragged {
             return Subscription::none()
         }
-        let time = iced::time::every(Duration::from_secs_f64(1.0)).map(|_| Message::UpdateTime);
+        let time = iced::time::every(Duration::from_secs_f64(1.0)).map(|_| Message::TickPlaybackPosition);
         Subscription::from(time)
     }
 
@@ -157,75 +148,8 @@ impl Multiplayer {
 
                 Task::none()
             }
-            Message::Play => {
-                Task::none()
-            }
-
-            Message::SwitchTrack(track) => {
-                Task::none()
-            }
-
             Message::MultiplayerPlaylist(message) => {
                 match message {
-                    // MultiplayerPlaylistMessage::Play(id) => {
-                    //     self.playlist.current_track = Some(id);
-                    //     let new_volume = match self.playlist.get_current_track() {
-                    //         None => 1.0,
-                    //         Some(track) => track.volume,
-                    //     };
-                    //     self.playback_position = match self.playlist.get_current_track() {
-                    //         None => 0.0,
-                    //         Some(track) => {
-                    //             if track.data.duration() < Duration::from_secs_f64(self.playback_position) {
-                    //                 0.0
-                    //             } else {
-                    //                 self.playback_position
-                    //             }
-                    //         }
-                    //     };
-                    // 
-                    //     if self.currently_playing_static_sound_handle.is_some() {
-                    //         self.currently_playing_static_sound_handle.take().unwrap().stop(Tween {
-                    //             start_time: StartTime::Immediate,
-                    //             duration: self.fade_out_duration,
-                    //             easing: Easing::Linear,
-                    //         });
-                    //     }
-                    //     let static_sound_data = self.playlist.get_track(id).data
-                    //         .start_position(PlaybackPosition::Seconds(self.playback_position))
-                    //         .loop_region(..)
-                    //         .fade_in_tween(Tween {
-                    //             start_time: StartTime::Immediate,
-                    //             duration: self.fade_in_duration,
-                    //             easing: Easing::Linear,
-                    //         });
-                    // 
-                    //     self.currently_playing_static_sound_handle = Option::from(self.primary_track_handle.play(static_sound_data).unwrap());
-                    //     self.volume_tweener.set(
-                    //         new_volume,
-                    //         Tween {
-                    //             start_time: StartTime::Immediate,
-                    //             duration: self.volume_fade_in_out_duration,
-                    //             easing: Easing::Linear,
-                    //     });
-                    // },
-                    // MultiplayerPlaylistMessage::Pause | MultiplayerPlaylistMessage::Stop => todo!(),
-                    // MultiplayerPlaylistMessage::UpdateVolumeSlider(new_volume) => {
-                    //     
-                    // 
-                    // }
-                    // MultiplayerPlaylistMessage::VolumeSliderRelease(index) => {
-                    //     if self.playlist.current_track.is_some_and(|current_track| current_track != index) {
-                    //         return Task::none();
-                    //     };
-                    //     self.volume_tweener.set(
-                    //         self.playlist.get_current_track().unwrap().volume,
-                    //         Tween {
-                    //             start_time: StartTime::Immediate,
-                    //             duration: self.volume_fade_in_out_duration,
-                    //             easing: Easing::Linear,
-                    //         });
-                    // },
                     MultiplayerPlaylistMessage::MultiplayerTrack(index, message) => {
                         match message {
                             MultiplayerTrackMessage::Play => {
@@ -273,7 +197,6 @@ impl Multiplayer {
                             MultiplayerTrackMessage::UpdateVolumeSlider(new_volume) => {
                                 self.playlist.tracks[index].volume = new_volume;
                                 if self.playlist.current_track.is_some_and(|current_track| current_track == index) {
-                                    println!("Update Volume Slider since the track is playing: {:?}", new_volume);
                                     self.volume_tweener.set(
                                         new_volume,
                                         Tween {
@@ -282,9 +205,6 @@ impl Multiplayer {
                                             easing: Easing::Linear,
                                         });
                                 }
-                                else { 
-                                    println!("Track is not playing, not updating volume slider: {:?}", new_volume);
-                                }
                             }
                         }
                     }
@@ -292,14 +212,14 @@ impl Multiplayer {
 
                 Task::none()
             },
-            Message::UpdateSlider(slider_position) => {
+            Message::UpdatePlaybackPositionSlider(slider_position) => {
                 self.audio_seek_dragged = true;
                 println!("Update Slider: {:?}", slider_position);
                 self.playback_position = slider_position;
 
                 Task::none()
             },
-            Message::SeekAudio => {
+            Message::SeekToPlaybackPosition => {
                 if let Some(handle) = self.currently_playing_static_sound_handle.as_mut() {
                     println!("Seek Audio: {:?}", self.playback_position);
                     handle.seek_to(self.playback_position);
@@ -308,7 +228,7 @@ impl Multiplayer {
 
                 Task::none()
             },
-            Message::UpdateTime => {
+            Message::TickPlaybackPosition => {
                 if let Some(handle) = &self.currently_playing_static_sound_handle {
                     println!("Update Time: {:?}", handle.position());
                     self.playback_position = handle.position();
@@ -316,7 +236,6 @@ impl Multiplayer {
 
                 Task::none()
             },
-            Message::MultiplayerTrack(_) => todo!(),
         }
     }
 
@@ -327,11 +246,6 @@ impl Multiplayer {
                 "Open file",
                 (!self.is_loading).then_some(Message::OpenFile)
             ),
-            action(
-                icon('\u{0f115}'),
-                "Play",
-                Some(Message::Play)
-            )
         ]
             .height(42)
             .padding(2)
@@ -345,9 +259,9 @@ impl Multiplayer {
             slider(
                 0.0..=total_duration.as_secs_f64(),
                 self.playback_position,
-                Message::UpdateSlider,
+                Message::UpdatePlaybackPositionSlider,
             )
-                .on_release(Message::SeekAudio)
+                .on_release(Message::SeekToPlaybackPosition)
                 .height(16)
                 .width(Fill)
         )

@@ -1,9 +1,8 @@
-use iced::{Element, Fill};
-use iced::futures::SinkExt;
-use iced::widget::{row, column, scrollable, Container, button, text, container, slider, Column, Row};
-use kira::Decibels;
-use kira::sound::static_sound::StaticSoundData;
 use crate::multiplayer::Message;
+use iced::widget::{button, column, container, horizontal_space, row, scrollable, slider, text, Column, Container, Row};
+use iced::{Element, Fill};
+use iced::alignment::Horizontal;
+use kira::sound::static_sound::StaticSoundData;
 
 #[derive(Debug, Clone)]
 pub enum MultiplayerTrackMessage {
@@ -14,7 +13,6 @@ pub enum MultiplayerTrackMessage {
 pub struct MultiplayerTrack {
     pub path: String,
     pub data: StaticSoundData,
-    // TODO Maybe use Decibels here?
     pub volume: f64,
 }
 
@@ -41,15 +39,20 @@ impl MultiplayerTrack {
             .center_x(Fill)
             .padding([10, 40]);
 
-        let top_row: Row<MultiplayerTrackMessage> = row![
-                        text(format!("{}", self.path)),
-                        button("Play")
-                            .on_press(MultiplayerTrackMessage::Play)
-                            .padding(8)
-                    ]
-            .padding(4)
-            .spacing(2);
-
+        let top_row: Container<MultiplayerTrackMessage> = container(
+            row![
+                text(format!("{}", self.path)).align_x(Horizontal::Left),
+                horizontal_space(),
+                container(
+                    button("Play").on_press(MultiplayerTrackMessage::Play)
+                ).align_x(Horizontal::Right)
+                .padding([2, 20]),
+            ]
+                .spacing(10)
+        )
+            .center_x(Fill)
+            .width(Fill)
+            .padding([2, 20]);
 
         column![
                         top_row,
@@ -61,11 +64,6 @@ impl MultiplayerTrack {
 
 #[derive(Debug, Clone)]
 pub enum MultiplayerPlaylistMessage {
-    // Play(usize),
-    // Pause,
-    // Stop,
-    // UpdateVolumeSlider(f64),
-    // VolumeSliderRelease(usize),
     MultiplayerTrack(usize, MultiplayerTrackMessage),
 }
 
@@ -111,6 +109,8 @@ impl MultiplayerPlaylist {
         let container: Element<'_, MultiplayerPlaylistMessage> = Container::new(scrollable(
             Column::with_children(multiplayer_track_views)
         ))
+            .padding(10)
+            .center_x(Fill)
             .into();
         container.map(Message::MultiplayerPlaylist)
     }
