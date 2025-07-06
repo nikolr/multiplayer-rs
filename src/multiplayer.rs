@@ -15,6 +15,7 @@ use std::io::Write;
 use std::sync::mpsc;
 use std::time::Duration;
 use std::{error, io, thread};
+use std::net::UdpSocket;
 use sysinfo::{get_current_pid, Pid};
 use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
 
@@ -85,13 +86,15 @@ impl Default for Multiplayer {
                 }
             });
 
-        let mut outfile = File::create("recorded_u8.raw").unwrap();
+        // let mut outfile = File::create("recorded_u8.raw").unwrap();
+        let udp_socket = UdpSocket::bind("127.0.0.1:9475").unwrap();
 
         thread::spawn(move || {
             loop {
                 match rx_capt.recv() {
                     Ok(chunk) => {
-                        outfile.write_all(&chunk).unwrap();
+                        println!("Send Chunk with len: {}", chunk.len());
+                        udp_socket.send_to(&chunk, "127.0.0.1:9476").unwrap();
                     }
                     Err(err) => {
 
@@ -157,7 +160,7 @@ impl Multiplayer {
             UsedTrackHandle::Secondary => &mut self.primary_track_handle,
         }
     }
-    
+
     pub fn subscription(&self) -> Subscription<Message> {
         if self.audio_seek_dragged {
             return Subscription::none()
@@ -302,7 +305,7 @@ impl Multiplayer {
                                     //     Tween {
                                     //         start_time: StartTime::Immediate,
                                     //         duration: Duration::from_millis(self.fade_in_duration),
-                                    //         easing: Easing::Linear, 
+                                    //         easing: Easing::Linear,
                                     //     }
                                     // );
                                 if self.used_track_handle == UsedTrackHandle::Primary {
@@ -378,7 +381,7 @@ impl Multiplayer {
                                     self.currently_playing_static_sound_handle = None;
                                     self.playback_position = 0.0;
                                 }
-                                else { 
+                                else {
                                     if self.playlist.current_track.is_some() && index < self.playlist.current_track.unwrap() {
                                         self.playlist.current_track = Some(self.playlist.current_track.unwrap() - 1);
                                     }
@@ -437,9 +440,9 @@ impl Multiplayer {
 
                 Task::none()
             },
-            
+
             Message::Pause => {
-                if self.currently_playing_static_sound_handle.is_some() { 
+                if self.currently_playing_static_sound_handle.is_some() {
                     self.currently_playing_static_sound_handle.as_mut().unwrap().pause(Tween {
                         start_time: StartTime::Immediate,
                         duration: Duration::from_millis(self.fade_out_duration),
@@ -448,9 +451,9 @@ impl Multiplayer {
                 }
                 Task::none()
             },
-            
+
             Message::Resume => {
-                if self.currently_playing_static_sound_handle.is_some() { 
+                if self.currently_playing_static_sound_handle.is_some() {
                     let handle = self.currently_playing_static_sound_handle.as_mut().unwrap();
                     match handle.state() {
                         PlaybackState::Paused => {
@@ -465,10 +468,10 @@ impl Multiplayer {
                         }
                     }
                 }
-                
+
                 Task::none()
             }
-            
+
             Message::Stop => {
                 if self.currently_playing_static_sound_handle.is_some() {
                     self.currently_playing_static_sound_handle.as_mut().unwrap().stop(Tween {
@@ -581,7 +584,7 @@ impl Multiplayer {
             .height(36)
             .padding(8)
             .spacing(8);
-        
+
         column![
             controls,
             self.playlist.view(),
