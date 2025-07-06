@@ -13,13 +13,20 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
 use std::{error, io, thread};
+use rfd::FileHandle;
 use sysinfo::{get_current_pid, Pid};
 use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
+use crate::playlist::{Playlist, Track};
 
 #[derive(Debug, Clone)]
 pub enum Message {
-    OpenFile,
-    FileOpened(Result<(PathBuf, StaticSoundData), Error>),
+    OpenFiles,
+    FilesOpened(Result<Vec<FileHandle>, Error>),
+    ImportPlaylist,
+    PlaylistImported(Result<FileHandle, Error>),
+    ExportPlaylist,
+    PlaylistExported(Result<FileHandle, Error>),
+    PlaylistSavedToFile(Result<(), Error>),
     MultiplayerPlaylist(MultiplayerPlaylistMessage),
     UpdatePlaybackPositionSlider(f64),
     SeekToPlaybackPosition,
@@ -128,26 +135,100 @@ impl Multiplayer {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::OpenFile => {
+            Message::OpenFiles => {
                 if self.is_loading {
                     Task::none()
                 } else {
                     self.is_loading = true;
 
-                    Task::perform(open_file(), Message::FileOpened)
+                    Task::perform(open_file(), Message::FilesOpened)
                 }
             }
-            Message::FileOpened(result) => {
+            Message::FilesOpened(result) => {
                 self.is_loading = false;
 
-                if let Ok((path, contents)) = result {
-                    self.playlist.add_track(
-                        MultiplayerTrack::new(String::from(path.to_str().unwrap()), contents)
-                    )
+                if let Ok(paths) = result {
+                    for path in paths {
+                        self.playlist.add_track(MultiplayerTrack::new(String::from(path.path().to_str().unwrap())).unwrap())
+                    }
                 }
 
                 Task::none()
             }
+
+            Message::ImportPlaylist => {
+                if self.is_loading {
+                    Task::none()
+                } else {
+                    self.is_loading = true;
+
+                    Task::perform(open_playlist(), Message::PlaylistImported)
+                }
+            },
+
+            Message::PlaylistImported(result) => {
+                if let Ok(file) = result {
+                    self.playlist.tracks.clear();
+                    self.playlist.current_track = None;
+                    self.playback_position = 0.0;
+                    self.currently_playing_static_sound_handle.as_mut().unwrap().stop(Tween {
+                        start_time: StartTime::Immediate,
+                        duration: Duration::from_secs_f64(0.0),
+                        easing: Easing::Linear,
+                    });
+                    self.currently_playing_static_sound_handle = None;
+                    let playlist_json = std::fs::read_to_string(file.path().to_str().unwrap()).unwrap();
+                    let playlist: Playlist = serde_json::from_str(&playlist_json).unwrap();
+                    for track in playlist.tracks {
+                        self.playlist.add_track(MultiplayerTrack::from(&track).unwrap())
+                    }
+                }
+                self.is_loading = false;
+
+                Task::none()
+            }
+
+            Message::ExportPlaylist => {
+                if self.is_loading {
+                    Task::none()
+                } else {
+                    self.is_loading = true;
+
+                    Task::perform(save_playlist(), Message::PlaylistExported)
+                }
+            },
+
+            Message::PlaylistExported(result) => {
+                match result {
+                    Ok(path) => {
+                        let playlist = self.playlist.tracks.iter()
+                            .map(|track| {
+                                Track {
+                                    path: track.path.clone(),
+                                    volume: track.volume,
+                                }
+                            })
+                            .collect::<Vec<Track>>();
+                        let playlist = Playlist {
+                            tracks: playlist
+                        };
+                        let playlist_json = serde_json::to_string(&playlist).unwrap();
+
+                        Task::perform(save_playlist_to_file(path, playlist_json), Message::PlaylistSavedToFile)
+                    }
+                    Err(_) => {
+                        self.is_loading = false;
+                        Task::none()
+                    }
+                }
+            },
+
+            Message::PlaylistSavedToFile(_) => {
+                println!("Playlist Saved");
+                self.is_loading = false;
+                Task::none()
+            }
+
             Message::MultiplayerPlaylist(message) => {
                 match message {
                     MultiplayerPlaylistMessage::MultiplayerTrack(index, message) => {
@@ -244,7 +325,17 @@ impl Multiplayer {
             action(
                 open_icon(),
                 "Open file",
-                (!self.is_loading).then_some(Message::OpenFile)
+                (!self.is_loading).then_some(Message::OpenFiles)
+            ),
+            action(
+                save_icon(),
+                "Save playlist",
+                (!self.is_loading).then_some(Message::ExportPlaylist)
+            ),
+            action(
+                open_icon(),
+                "Open playlist",
+                (!self.is_loading).then_some(Message::ImportPlaylist)
             ),
         ]
             .height(42)
@@ -279,16 +370,49 @@ impl Multiplayer {
     }
 }
 
-async fn open_file() -> Result<(PathBuf, StaticSoundData), Error> {
-    let path = rfd::AsyncFileDialog::new()
+async fn open_file() -> Result<Vec<FileHandle>, Error> {
+    let paths = rfd::AsyncFileDialog::new()
         .set_title("Choose an audio file...")
         .add_filter("Audio files", &["wav", "mp3", "flac", "ogg"])
+        .pick_files()
+        .await
+        .ok_or(Error::DialogClosed)?;
+
+    Ok(paths)
+}
+
+async fn open_playlist() -> Result<FileHandle, Error> {
+    let path = rfd::AsyncFileDialog::new()
+        .set_title("Choose a playlist file...")
+        .add_filter("Playlist files", &["json"])
         .pick_file()
         .await
         .ok_or(Error::DialogClosed)?;
 
-    let static_sound_data = StaticSoundData::from_file(path.path()).unwrap();
-    Ok((path.path().to_owned(), static_sound_data))
+    Ok(path)
+}
+
+async fn save_playlist() -> Result<FileHandle, Error> {
+    let path = rfd::AsyncFileDialog::new()
+        .set_title("Choose a playlist file...")
+        .add_filter("Playlist files", &["json"])
+        .save_file()
+        .await
+        .ok_or(Error::DialogClosed)?;
+
+    Ok(path)
+}
+
+async fn save_playlist_to_file(path: FileHandle, playlist_json: String) -> Result<(), Error> {
+    let res = path.write(playlist_json.as_bytes()).await;
+    match res {
+        Ok(_) => {
+            Ok(())
+        }
+        Err(_) => {
+            Err(Error::IoError(io::ErrorKind::Other))
+        }
+    }
 }
 
 fn action<'a, Message: Clone + 'a>(

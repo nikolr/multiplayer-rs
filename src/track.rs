@@ -3,7 +3,10 @@ use crate::multiplayer::Message;
 use iced::widget::{button, column, container, horizontal_space, row, scrollable, slider, text, Column, Container, Row};
 use iced::{Element, Fill};
 use iced::alignment::Horizontal;
+use kira::sound::FromFileError;
 use kira::sound::static_sound::StaticSoundData;
+use serde::{Deserialize, Serialize};
+use crate::playlist::{Playlist, Track};
 
 #[derive(Debug, Clone)]
 pub enum MultiplayerTrackMessage {
@@ -11,6 +14,8 @@ pub enum MultiplayerTrackMessage {
     UpdateVolumeSlider(f64),
 }
 
+
+#[derive(Debug, Clone)]
 pub struct MultiplayerTrack {
     pub path: String,
     pub data: StaticSoundData,
@@ -18,11 +23,27 @@ pub struct MultiplayerTrack {
 }
 
 impl MultiplayerTrack {
-    pub fn new(path: String, data: StaticSoundData) -> Self {
-        Self {
-            path,
-            data,
-            volume: 1.0,
+    pub fn new(path: String) -> Result<Self, FromFileError> {
+        let static_sound_data = StaticSoundData::from_file(path.clone());
+        match static_sound_data {
+            Ok(data) => Ok(Self {
+                path,
+                data,
+                volume: 1.0,
+            }),
+            Err(error) => Err(error),       
+        }
+    }
+    
+    pub fn from(track: &Track) -> Result<Self, FromFileError> {
+        let static_sound_data = StaticSoundData::from_file(track.path.clone());
+        match static_sound_data {
+            Ok(data) => Ok(Self {
+                path: track.path.clone(),
+                data,
+                volume: track.volume,
+            }),
+            Err(error) => Err(error),
         }
     }
     
