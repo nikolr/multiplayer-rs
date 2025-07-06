@@ -3,7 +3,7 @@ use iced::widget::{button, center, column, container, row, slider, text, tooltip
 use iced::{Alignment, Element, Fill, Font, Subscription, Task};
 use kira::modulator::tweener::{TweenerBuilder, TweenerHandle};
 use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle};
-use kira::sound::PlaybackPosition;
+use kira::sound::{PlaybackPosition, PlaybackState};
 use kira::track::{TrackBuilder, TrackHandle};
 use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Easing, Mapping, StartTime, Tween, Value};
 use std::collections::VecDeque;
@@ -36,7 +36,9 @@ pub enum Message {
     TickPlaybackPosition,
     UpdateFadeInDurationSlider(f64),
     UpdateFadeOutDurationSlider(f64),
-    UpdateVolumeFadeInOutDurationSlider(f64),
+    Pause,
+    Resume,
+    Stop,
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -152,13 +154,6 @@ impl Default for Multiplayer {
 
 impl Multiplayer {
 
-    fn get_used_track_handle(&mut self) -> &mut TrackHandle {
-        match self.used_track_handle {
-            UsedTrackHandle::Primary => &mut self.primary_track_handle,
-            UsedTrackHandle::Secondary => &mut self.secondary_track_handle,
-        }
-    }
-
     fn get_unused_track_handle(&mut self) -> &mut TrackHandle {
         match self.used_track_handle {
             UsedTrackHandle::Primary => &mut self.secondary_track_handle,
@@ -166,20 +161,6 @@ impl Multiplayer {
         }
     }
     
-    fn get_used_volume_tweener(&mut self) -> &mut TweenerHandle {
-        match self.used_track_handle {
-            UsedTrackHandle::Primary => &mut self.primary_volume_tweener,
-            UsedTrackHandle::Secondary => &mut self.secondary_volume_tweener,
-        }
-    }
-    
-    fn get_unused_volume_tweener(&mut self) -> &mut TweenerHandle {
-        match self.used_track_handle {
-            UsedTrackHandle::Primary => &mut self.secondary_volume_tweener,
-            UsedTrackHandle::Secondary => &mut self.primary_volume_tweener,
-        }
-    }
-
     pub fn subscription(&self) -> Subscription<Message> {
         if self.audio_seek_dragged {
             return Subscription::none()
@@ -291,6 +272,9 @@ impl Multiplayer {
                     MultiplayerPlaylistMessage::MultiplayerTrack(index, message) => {
                         match message {
                             MultiplayerTrackMessage::Play => {
+                                if self.playlist.current_track.is_some_and(|current_track| current_track == index) {
+                                    return Task::none();
+                                }
                                 self.playlist.current_track = Some(index);
                                 let new_volume = match self.playlist.get_current_track() {
                                     None => 1.0,
@@ -366,13 +350,24 @@ impl Multiplayer {
                             MultiplayerTrackMessage::UpdateVolumeSlider(new_volume) => {
                                 self.playlist.tracks[index].volume = new_volume;
                                 if self.playlist.current_track.is_some_and(|current_track| current_track == index) {
-                                    self.primary_volume_tweener.set(
-                                        new_volume,
-                                        Tween {
-                                            start_time: StartTime::Immediate,
-                                            duration: Duration::from_millis(self.fade_out_duration),
-                                            easing: Easing::Linear,
-                                        });
+                                    if self.used_track_handle == UsedTrackHandle::Primary {
+                                        self.primary_volume_tweener.set(
+                                            new_volume,
+                                            Tween {
+                                                start_time: StartTime::Immediate,
+                                                duration: Duration::from_millis(0),
+                                                easing: Easing::Linear,
+                                            });
+                                    }
+                                    else {
+                                        self.secondary_volume_tweener.set(
+                                            new_volume,
+                                            Tween {
+                                                start_time: StartTime::Immediate,
+                                                duration: Duration::from_millis(0),
+                                                easing: Easing::Linear,
+                                            });
+                                    }
                                 }
                             },
                             MultiplayerTrackMessage::Remove => {
@@ -440,7 +435,51 @@ impl Multiplayer {
 
                 Task::none()
             },
-            Message::UpdateVolumeFadeInOutDurationSlider(_) => todo!(),
+            
+            Message::Pause => {
+                if self.currently_playing_static_sound_handle.is_some() { 
+                    self.currently_playing_static_sound_handle.as_mut().unwrap().pause(Tween {
+                        start_time: StartTime::Immediate,
+                        duration: Duration::from_millis(self.fade_out_duration),
+                        easing: Easing::Linear,
+                    })
+                }
+                Task::none()
+            },
+            
+            Message::Resume => {
+                if self.currently_playing_static_sound_handle.is_some() { 
+                    let handle = self.currently_playing_static_sound_handle.as_mut().unwrap();
+                    match handle.state() {
+                        PlaybackState::Paused => {
+                            handle.resume(Tween {
+                                start_time: StartTime::Immediate,
+                                duration: Duration::from_millis(self.fade_in_duration),
+                                easing: Easing::Linear,
+                            })
+                        }
+                        _ => {
+                            ()
+                        }
+                    }
+                }
+                
+                Task::none()
+            }
+            
+            Message::Stop => {
+                if self.currently_playing_static_sound_handle.is_some() {
+                    self.currently_playing_static_sound_handle.as_mut().unwrap().stop(Tween {
+                        start_time: StartTime::Immediate,
+                        duration: Duration::from_millis(self.fade_out_duration),
+                        easing: Easing::Linear,
+                    });
+                    self.currently_playing_static_sound_handle = None;
+                }
+                self.playback_position = 0.0;
+
+                Task::none()
+            }
         }
     }
 
@@ -518,13 +557,34 @@ impl Multiplayer {
         )
             .center_x(Fill)
             .padding([10, 40]);
+
+        let playback_controls = row![
+            action(
+                open_icon(),
+                "Pause",
+                (self.currently_playing_static_sound_handle.is_some() && self.currently_playing_static_sound_handle.as_ref().unwrap().state() == PlaybackState::Playing).then_some(Message::Pause)
+            ),
+            action(
+                save_icon(),
+                "Resume",
+                (self.currently_playing_static_sound_handle.is_some() && self.currently_playing_static_sound_handle.as_ref().unwrap().state() == PlaybackState::Paused).then_some(Message::Resume)
+            ),
+            action(
+                open_icon(),
+                "Stop",
+                (self.currently_playing_static_sound_handle.is_some() && self.currently_playing_static_sound_handle.as_ref().unwrap().state() != PlaybackState::Stopped).then_some(Message::Stop)
+            ),
+        ]
+            .height(36)
+            .padding(8)
+            .spacing(8);
         
         column![
             controls,
-            vertical_space(),
             self.playlist.view(),
             vertical_space(),
             seeker_slider,
+            container(playback_controls).center_x(Fill),
         ]
             .into()
     }

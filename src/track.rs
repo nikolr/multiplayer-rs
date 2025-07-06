@@ -1,4 +1,4 @@
-use iced::Length;
+use iced::{Length, Theme};
 use crate::multiplayer::Message;
 use iced::widget::{button, column, container, horizontal_space, row, scrollable, slider, text, Column, Container, Row};
 use iced::{Element, Fill};
@@ -50,7 +50,8 @@ impl MultiplayerTrack {
         }
     }
     
-    pub fn view(&self) -> Element<MultiplayerTrackMessage> {
+    pub fn view(&self, currently_playing: bool) -> Element<MultiplayerTrackMessage> {
+        println!("{:?}", currently_playing);
         let audio_slider: Container<MultiplayerTrackMessage> = container(
             slider(
                 0.0..=1.0,
@@ -85,10 +86,12 @@ impl MultiplayerTrack {
             .width(Fill)
             .padding([2, 20]);
 
-        column![
+        container(
+            column![
                         top_row,
                         audio_slider,
                 ]
+        ).style(if currently_playing {container::rounded_box} else {container::dark})
             .into()
     }
 }
@@ -137,7 +140,8 @@ impl MultiplayerPlaylist {
     
     pub fn view(&self) -> Element<'_, Message> {
         let multiplayer_track_views: Vec<Element<MultiplayerPlaylistMessage>> = self.tracks.iter()
-            .map(MultiplayerTrack::view)
+            .enumerate()
+            .map(|index| MultiplayerTrack::view(index.1, self.current_track.is_some_and(|_| index.0 == self.current_track.unwrap())))
             .enumerate()
             .map(|(index, track)| {
                 track.map(move |message| MultiplayerPlaylistMessage::MultiplayerTrack(index, message))
