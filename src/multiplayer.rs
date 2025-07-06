@@ -1,6 +1,6 @@
 use crate::track::{MultiplayerPlaylist, MultiplayerPlaylistMessage, MultiplayerTrack, MultiplayerTrackMessage};
 use iced::widget::{button, center, column, container, row, slider, text, tooltip, vertical_space, Container};
-use iced::{Element, Fill, Font, Subscription, Task};
+use iced::{Alignment, Element, Fill, Font, Subscription, Task};
 use kira::modulator::tweener::{TweenerBuilder, TweenerHandle};
 use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle};
 use kira::sound::PlaybackPosition;
@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
 use std::{error, io, thread};
+use iced::advanced::graphics::text::cosmic_text::Align;
 use rfd::FileHandle;
 use sysinfo::{get_current_pid, Pid};
 use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
@@ -31,6 +32,9 @@ pub enum Message {
     UpdatePlaybackPositionSlider(f64),
     SeekToPlaybackPosition,
     TickPlaybackPosition,
+    UpdateFadeInDurationSlider(f64),
+    UpdateFadeOutDurationSlider(f64),
+    UpdateVolumeFadeInOutDurationSlider(f64),
 }
 
 #[derive(Debug, Clone)]
@@ -48,8 +52,8 @@ pub struct Multiplayer {
     volume_tweener: TweenerHandle,
     playlist: MultiplayerPlaylist,
     playback_position: f64,
-    fade_in_duration: Duration,
-    fade_out_duration: Duration,
+    fade_in_duration: u64,
+    fade_out_duration: u64,
     volume_fade_in_out_duration: Duration,
     audio_seek_dragged: bool,
 }
@@ -113,8 +117,8 @@ impl Default for Multiplayer {
             volume_tweener: tweener,
             playlist: MultiplayerPlaylist::new(),
             playback_position: 0.0,
-            fade_in_duration: Duration::from_millis(600),
-            fade_out_duration: Duration::from_millis(600),
+            fade_in_duration: 600,
+            fade_out_duration: 600,
             volume_fade_in_out_duration: Duration::from_millis(1000),
             audio_seek_dragged: false,
         }
@@ -253,7 +257,7 @@ impl Multiplayer {
                                 if self.currently_playing_static_sound_handle.is_some() {
                                     self.currently_playing_static_sound_handle.take().unwrap().stop(Tween {
                                         start_time: StartTime::Immediate,
-                                        duration: self.fade_out_duration,
+                                        duration: Duration::from_millis(self.fade_out_duration),
                                         easing: Easing::Linear,
                                     });
                                 }
@@ -262,7 +266,7 @@ impl Multiplayer {
                                     .loop_region(..)
                                     .fade_in_tween(Tween {
                                         start_time: StartTime::Immediate,
-                                        duration: self.fade_in_duration,
+                                        duration: Duration::from_millis(self.fade_in_duration),
                                         easing: Easing::Linear,
                                     });
 
@@ -282,7 +286,7 @@ impl Multiplayer {
                                         new_volume,
                                         Tween {
                                             start_time: StartTime::Immediate,
-                                            duration: self.fade_out_duration,
+                                            duration: Duration::from_millis(self.fade_out_duration),
                                             easing: Easing::Linear,
                                         });
                                 }
@@ -292,7 +296,7 @@ impl Multiplayer {
                                     self.playlist.current_track = None;
                                     self.currently_playing_static_sound_handle.as_mut().unwrap().stop(Tween {
                                         start_time: StartTime::Immediate,
-                                        duration: self.fade_out_duration,
+                                        duration: Duration::from_millis(self.fade_out_duration),
                                         easing: Easing::Linear,
                                     });
                                     self.currently_playing_static_sound_handle = None;
@@ -342,10 +346,52 @@ impl Multiplayer {
 
                 Task::none()
             },
+            Message::UpdateFadeInDurationSlider(fade_in) => {
+                self.fade_in_duration = fade_in as u64;
+
+                Task::none()
+            },
+            Message::UpdateFadeOutDurationSlider(fade_out) => {
+                self.fade_out_duration = fade_out as u64;
+
+                Task::none()
+            },
+            Message::UpdateVolumeFadeInOutDurationSlider(_) => todo!(),
         }
     }
 
     pub fn view(&self) -> Element<Message> {
+        let fade_in_slider: Container<'_, Message> = container(
+            row![
+                slider(
+                    0.0..=5000.0,
+                    self.fade_in_duration as f64,
+                    Message::UpdateFadeInDurationSlider,
+                )
+                    .height(8)
+                    .width(Fill),
+                text(format!("{} ms", self.fade_in_duration)).width(Fill),
+            ]
+                .spacing(4)
+        )
+            .center_x(Fill)
+            .padding([6, 40]);
+        let fade_out_slider: Container<'_, Message> = container(
+            row![
+                slider(
+                    0.0..=5000.0,
+                    self.fade_out_duration as f64,
+                    Message::UpdateFadeOutDurationSlider,
+                )
+                    .height(8)
+                    .width(Fill),
+                text(format!("{} ms", self.fade_out_duration)).width(Fill),
+            ]
+                .spacing(4)
+        )
+            .center_x(Fill)
+            .padding([6, 40]);
+        
         let controls = row![
             action(
                 open_icon(),
@@ -362,10 +408,15 @@ impl Multiplayer {
                 "Open playlist",
                 (!self.is_loading).then_some(Message::ImportPlaylist)
             ),
+            column![
+                fade_in_slider.align_y(Alignment::Start),
+                vertical_space(),
+                fade_out_slider.align_y(Alignment::End),
+            ]
         ]
-            .height(42)
-            .padding(2)
-            .spacing(4);
+            .height(84)
+            .padding(8)
+            .spacing(8);
 
         let total_duration = match self.playlist.get_current_track() {
             Some(track) => track.data.duration(),

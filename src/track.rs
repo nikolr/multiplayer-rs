@@ -66,22 +66,20 @@ impl MultiplayerTrack {
 
         let top_row: Container<MultiplayerTrackMessage> = container(
             row![
-                text(format!("{}", self.path)).align_x(Horizontal::Left),
-                horizontal_space(),
-                column![
-                    button("Remove").on_press(MultiplayerTrackMessage::Remove),
-                ],
-                horizontal_space(),
-                column![
-                    button("UP").on_press(MultiplayerTrackMessage::MoveTrackUp),
-                    button("DOWN").on_press(MultiplayerTrackMessage::MoveTrackDown),
-                ],
                 container(
-                    button("Play").on_press(MultiplayerTrackMessage::Play)
-                ).align_x(Horizontal::Right)
-                .padding([2, 20]),
+                    button("Play").on_press(MultiplayerTrackMessage::Play).height(32)
+                ).align_x(Horizontal::Left)
+                .padding([2, 4]),
+                text(format!("{}", self.path)).align_x(Horizontal::Center).width(Fill),
+                column![
+                    button("Remove").on_press(MultiplayerTrackMessage::Remove).height(32),
+                ].align_x(Horizontal::Right),
+                column![
+                    button("UP").on_press(MultiplayerTrackMessage::MoveTrackUp).height(16),
+                    button("DOWN").on_press(MultiplayerTrackMessage::MoveTrackDown).height(16),
+                ].align_x(Horizontal::Right),
             ]
-                .spacing(10)
+                .spacing(4)
         )
             .center_x(Fill)
             .width(Fill)
