@@ -271,8 +271,8 @@ impl Multiplayer {
                 match message {
                     MultiplayerPlaylistMessage::MultiplayerTrack(index, message) => {
                         match message {
-                            MultiplayerTrackMessage::Play => {
-                                if self.playlist.current_track.is_some_and(|current_track| current_track == index) {
+                            MultiplayerTrackMessage::Play(reset) => {
+                                if self.playlist.current_track.is_some_and(|current_track| current_track == index) && !reset {
                                     return Task::none();
                                 }
                                 self.playlist.current_track = Some(index);
@@ -280,16 +280,21 @@ impl Multiplayer {
                                     None => 1.0,
                                     Some(track) => track.volume,
                                 };
-                                self.playback_position = match self.playlist.get_current_track() {
-                                    None => 0.0,
-                                    Some(track) => {
-                                        if track.data.duration() < Duration::from_secs_f64(self.playback_position) {
-                                            0.0
-                                        } else {
-                                            self.playback_position
+                                if reset {
+                                    self.playback_position = 0.0;
+                                }
+                                else {
+                                    self.playback_position = match self.playlist.get_current_track() {
+                                        None => 0.0,
+                                        Some(track) => {
+                                            if track.data.duration() < Duration::from_secs_f64(self.playback_position) {
+                                                0.0
+                                            } else {
+                                                self.playback_position
+                                            }
                                         }
-                                    }
-                                };
+                                    };
+                                }
 
                                 if self.currently_playing_static_sound_handle.is_some() {
                                     self.currently_playing_static_sound_handle.take().unwrap().stop(Tween {

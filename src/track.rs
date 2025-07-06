@@ -9,7 +9,7 @@ use kira::sound::FromFileError;
 
 #[derive(Debug, Clone)]
 pub enum MultiplayerTrackMessage {
-    Play,
+    Play(bool),
     UpdateVolumeSlider(f64),
     Remove,
     MoveTrackUp,
@@ -67,7 +67,11 @@ impl MultiplayerTrack {
         let top_row: Container<MultiplayerTrackMessage> = container(
             row![
                 container(
-                    button("Play").on_press(MultiplayerTrackMessage::Play).height(32)
+                    button("Play").on_press(MultiplayerTrackMessage::Play(false)).height(32)
+                ).align_x(Horizontal::Left)
+                .padding([2, 4]),
+                container(
+                    button("Reset").on_press(MultiplayerTrackMessage::Play(true)).height(32)
                 ).align_x(Horizontal::Left)
                 .padding([2, 4]),
                 text(format!("{}", self.path)).align_x(Horizontal::Center).width(Fill),
