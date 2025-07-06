@@ -12,6 +12,9 @@ use crate::playlist::{Playlist, Track};
 pub enum MultiplayerTrackMessage {
     Play,
     UpdateVolumeSlider(f64),
+    Remove,
+    MoveTrackUp,
+    MoveTrackDown,
 }
 
 
@@ -65,6 +68,14 @@ impl MultiplayerTrack {
             row![
                 text(format!("{}", self.path)).align_x(Horizontal::Left),
                 horizontal_space(),
+                column![
+                    button("Remove").on_press(MultiplayerTrackMessage::Remove),
+                ],
+                horizontal_space(),
+                column![
+                    button("UP").on_press(MultiplayerTrackMessage::MoveTrackUp),
+                    button("DOWN").on_press(MultiplayerTrackMessage::MoveTrackDown),
+                ],
                 container(
                     button("Play").on_press(MultiplayerTrackMessage::Play)
                 ).align_x(Horizontal::Right)
@@ -112,6 +123,14 @@ impl MultiplayerPlaylist {
     
     pub fn get_track(&self, index: usize) -> &MultiplayerTrack {
         &self.tracks[index]
+    }
+    
+    pub fn swap_tracks(&mut self, index1: usize, index2: usize) {
+        self.tracks.swap(index1, index2);
+    }
+    
+    pub fn set_current_track(&mut self, index: Option<usize>) {
+        self.current_track = index;
     }
     
     pub fn get_current_track(&self) -> Option<&MultiplayerTrack> {

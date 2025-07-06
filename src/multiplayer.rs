@@ -45,7 +45,6 @@ pub struct Multiplayer {
     primary_track_handle: TrackHandle,
     secondary_track_handle: TrackHandle,
     currently_playing_static_sound_handle: Option<StaticSoundHandle>,
-    current_static_sound_data_index: Option<usize>,
     volume_tweener: TweenerHandle,
     playlist: MultiplayerPlaylist,
     playback_position: f64,
@@ -111,7 +110,6 @@ impl Default for Multiplayer {
             primary_track_handle: primary_track,
             secondary_track_handle: secondary_track,
             currently_playing_static_sound_handle: None,
-            current_static_sound_data_index: None,
             volume_tweener: tweener,
             playlist: MultiplayerPlaylist::new(),
             playback_position: 0.0,
@@ -171,12 +169,14 @@ impl Multiplayer {
                     self.playlist.tracks.clear();
                     self.playlist.current_track = None;
                     self.playback_position = 0.0;
-                    self.currently_playing_static_sound_handle.as_mut().unwrap().stop(Tween {
-                        start_time: StartTime::Immediate,
-                        duration: Duration::from_secs_f64(0.0),
-                        easing: Easing::Linear,
-                    });
-                    self.currently_playing_static_sound_handle = None;
+                    if self.currently_playing_static_sound_handle.is_some() {
+                        self.currently_playing_static_sound_handle.as_mut().unwrap().stop(Tween {
+                            start_time: StartTime::Immediate,
+                            duration: Duration::from_secs_f64(0.0),
+                            easing: Easing::Linear,
+                        });
+                        self.currently_playing_static_sound_handle = None;
+                    }
                     let playlist_json = std::fs::read_to_string(file.path().to_str().unwrap()).unwrap();
                     let playlist: Playlist = serde_json::from_str(&playlist_json).unwrap();
                     for track in playlist.tracks {
@@ -282,11 +282,36 @@ impl Multiplayer {
                                         new_volume,
                                         Tween {
                                             start_time: StartTime::Immediate,
-                                            duration: Duration::from_millis(100),
+                                            duration: self.fade_out_duration,
                                             easing: Easing::Linear,
                                         });
                                 }
-                            }
+                            },
+                            MultiplayerTrackMessage::Remove => {
+                                if self.playlist.current_track.is_some_and(|current_track| current_track == index ) {
+                                    self.playlist.current_track = None;
+                                    self.currently_playing_static_sound_handle.as_mut().unwrap().stop(Tween {
+                                        start_time: StartTime::Immediate,
+                                        duration: self.fade_out_duration,
+                                        easing: Easing::Linear,
+                                    });
+                                    self.currently_playing_static_sound_handle = None;
+                                    self.playback_position = 0.0;
+                                }
+                                self.playlist.remove_track(index);
+                            },
+                            MultiplayerTrackMessage::MoveTrackUp => {
+                                if index != 0 {
+                                    self.playlist.swap_tracks(index, index - 1);
+                                    println!("Move Track Up");
+                                }
+                            },
+                            MultiplayerTrackMessage::MoveTrackDown => {
+                                if index != self.playlist.tracks.len() - 1 {
+                                    self.playlist.swap_tracks(index, index + 1);
+                                    println!("Move Track Down");
+                                }
+                            },
                         }
                     }
                 }
