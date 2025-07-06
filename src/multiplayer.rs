@@ -1,25 +1,22 @@
+use crate::playlist::{Playlist, Track};
 use crate::track::{MultiplayerPlaylist, MultiplayerPlaylistMessage, MultiplayerTrack, MultiplayerTrackMessage};
 use iced::widget::{button, center, column, container, row, slider, text, tooltip, vertical_space, Container};
 use iced::{Alignment, Element, Fill, Font, Subscription, Task};
 use kira::modulator::tweener::{TweenerBuilder, TweenerHandle};
-use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle};
+use kira::sound::static_sound::StaticSoundHandle;
 use kira::sound::{PlaybackPosition, PlaybackState};
 use kira::track::{TrackBuilder, TrackHandle};
 use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Easing, Mapping, StartTime, Tween, Value};
+use rfd::FileHandle;
+use std::cmp::PartialEq;
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::Write;
-use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
 use std::{error, io, thread};
-use std::cmp::PartialEq;
-use iced::advanced::graphics::text::cosmic_text::Align;
-use iced::widget::shader::wgpu::core::command::QueryError::Use;
-use rfd::FileHandle;
 use sysinfo::{get_current_pid, Pid};
 use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
-use crate::playlist::{Playlist, Track};
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -375,11 +372,16 @@ impl Multiplayer {
                                     self.playlist.current_track = None;
                                     self.currently_playing_static_sound_handle.as_mut().unwrap().stop(Tween {
                                         start_time: StartTime::Immediate,
-                                        duration: Duration::from_millis(self.fade_out_duration),
+                                        duration: Duration::from_millis(0),
                                         easing: Easing::Linear,
                                     });
                                     self.currently_playing_static_sound_handle = None;
                                     self.playback_position = 0.0;
+                                }
+                                else { 
+                                    if self.playlist.current_track.is_some() && index < self.playlist.current_track.unwrap() {
+                                        self.playlist.current_track = Some(self.playlist.current_track.unwrap() - 1);
+                                    }
                                 }
                                 self.playlist.remove_track(index);
                             },
@@ -475,6 +477,7 @@ impl Multiplayer {
                         easing: Easing::Linear,
                     });
                     self.currently_playing_static_sound_handle = None;
+                    self.playlist.current_track = None;
                 }
                 self.playback_position = 0.0;
 

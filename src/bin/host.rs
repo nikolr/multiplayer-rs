@@ -10,6 +10,6 @@ fn main() -> iced::Result {
         .run()
 }
 
-fn theme(state: &Multiplayer) -> Theme {
+fn theme(_state: &Multiplayer) -> Theme {
     Theme::SolarizedDark
 }
