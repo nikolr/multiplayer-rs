@@ -4,7 +4,7 @@ use iced::widget::{button, center, column, container, row, slider, text, tooltip
 use iced::{Alignment, Element, Fill, Font, Subscription, Task};
 use kira::modulator::tweener::{TweenerBuilder, TweenerHandle};
 use kira::sound::static_sound::StaticSoundHandle;
-use kira::sound::{PlaybackPosition, PlaybackState};
+use kira::sound::{FromFileError, PlaybackPosition, PlaybackState};
 use kira::track::{TrackBuilder, TrackHandle};
 use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Easing, Mapping, StartTime, Tween, Value};
 use rfd::FileHandle;
@@ -22,9 +22,9 @@ use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, Wav
 #[derive(Debug, Clone)]
 pub enum Message {
     OpenFiles,
-    FilesOpened(Result<Vec<FileHandle>, Error>),
+    FilesOpened(Result<Vec<MultiplayerTrack>, Error>),
     ImportPlaylist,
-    PlaylistImported(Result<FileHandle, Error>),
+    PlaylistImported(Result<Vec<MultiplayerTrack>, Error>),
     ExportPlaylist,
     PlaylistExported(Result<FileHandle, Error>),
     PlaylistSavedToFile(Result<(), Error>),
@@ -177,15 +177,15 @@ impl Multiplayer {
                 } else {
                     self.is_loading = true;
 
-                    Task::perform(open_file(), Message::FilesOpened)
+                    Task::perform(open_files(), Message::FilesOpened)
                 }
             }
             Message::FilesOpened(result) => {
                 self.is_loading = false;
 
-                if let Ok(paths) = result {
-                    for path in paths {
-                        self.playlist.add_track(MultiplayerTrack::new(String::from(path.path().to_str().unwrap())).unwrap())
+                if let Ok(tracks) = result {
+                    for track in tracks {
+                        self.playlist.add_track(track)
                     }
                 }
 
@@ -203,7 +203,7 @@ impl Multiplayer {
             },
 
             Message::PlaylistImported(result) => {
-                if let Ok(file) = result {
+                if let Ok(tracks) = result {
                     self.playlist.tracks.clear();
                     self.playlist.current_track = None;
                     self.playback_position = 0.0;
@@ -215,10 +215,8 @@ impl Multiplayer {
                         });
                         self.currently_playing_static_sound_handle = None;
                     }
-                    let playlist_json = std::fs::read_to_string(file.path().to_str().unwrap()).unwrap();
-                    let playlist: Playlist = serde_json::from_str(&playlist_json).unwrap();
-                    for track in playlist.tracks {
-                        self.playlist.add_track(MultiplayerTrack::from(&track).unwrap())
+                    for track in tracks {
+                        self.playlist.add_track(track);
                     }
                 }
                 self.is_loading = false;
@@ -601,7 +599,7 @@ impl Multiplayer {
     }
 }
 
-async fn open_file() -> Result<Vec<FileHandle>, Error> {
+async fn open_files() -> Result<Vec<MultiplayerTrack>, Error> {
     let paths = rfd::AsyncFileDialog::new()
         .set_title("Choose an audio file...")
         .add_filter("Audio files", &["wav", "mp3", "flac", "ogg"])
@@ -609,10 +607,14 @@ async fn open_file() -> Result<Vec<FileHandle>, Error> {
         .await
         .ok_or(Error::DialogClosed)?;
 
-    Ok(paths)
+    paths.iter().map(|path| {
+        MultiplayerTrack::new(String::from(path.path().to_str().unwrap()))
+    })
+    .collect::<Result<Vec<MultiplayerTrack>, Error>>()
+
 }
 
-async fn open_playlist() -> Result<FileHandle, Error> {
+async fn open_playlist() -> Result<Vec<MultiplayerTrack>, Error> {
     let path = rfd::AsyncFileDialog::new()
         .set_title("Choose a playlist file...")
         .add_filter("Playlist files", &["json"])
@@ -620,7 +622,18 @@ async fn open_playlist() -> Result<FileHandle, Error> {
         .await
         .ok_or(Error::DialogClosed)?;
 
-    Ok(path)
+    parse_playlist(path).await
+}
+
+async fn parse_playlist(file_handle: FileHandle) -> Result<Vec<MultiplayerTrack>, Error> {
+    let playlist_json = std::fs::read_to_string(file_handle.path().to_str().unwrap()).unwrap();
+    let playlist: Playlist = serde_json::from_str(&playlist_json).unwrap();
+    let result = playlist.tracks.iter()
+        .map(|track| {
+            MultiplayerTrack::from(track)
+        })
+        .collect::<Result<Vec<MultiplayerTrack>, Error>>();
+    result
 }
 
 async fn save_playlist() -> Result<FileHandle, Error> {

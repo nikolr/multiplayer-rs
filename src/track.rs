@@ -1,4 +1,5 @@
-use crate::multiplayer::Message;
+use std::io::ErrorKind;
+use crate::multiplayer::{Error, Message};
 use crate::playlist::Track;
 use iced::alignment::Horizontal;
 use iced::widget::{button, column, container, row, scrollable, slider, text, Column, Container};
@@ -6,6 +7,7 @@ use iced::{Element, Fill};
 use iced::Length;
 use kira::sound::static_sound::StaticSoundData;
 use kira::sound::FromFileError;
+use crate::multiplayer::Error::IoError;
 
 #[derive(Debug, Clone)]
 pub enum MultiplayerTrackMessage {
@@ -25,7 +27,7 @@ pub struct MultiplayerTrack {
 }
 
 impl MultiplayerTrack {
-    pub fn new(path: String) -> Result<Self, FromFileError> {
+    pub fn new(path: String) -> Result<Self, Error> {
         let static_sound_data = StaticSoundData::from_file(path.clone());
         match static_sound_data {
             Ok(data) => Ok(Self {
@@ -33,11 +35,11 @@ impl MultiplayerTrack {
                 data,
                 volume: 1.0,
             }),
-            Err(error) => Err(error),       
+            Err(_) => Err(IoError(ErrorKind::InvalidData)),
         }
     }
     
-    pub fn from(track: &Track) -> Result<Self, FromFileError> {
+    pub fn from(track: &Track) -> Result<Self, Error> {
         let static_sound_data = StaticSoundData::from_file(track.path.clone());
         match static_sound_data {
             Ok(data) => Ok(Self {
@@ -45,7 +47,7 @@ impl MultiplayerTrack {
                 data,
                 volume: track.volume,
             }),
-            Err(error) => Err(error),
+            Err(_) => Err(IoError(ErrorKind::InvalidData)),
         }
     }
     
