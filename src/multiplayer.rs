@@ -13,7 +13,9 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
 use std::{error, io, thread};
+use std::cmp::PartialEq;
 use iced::advanced::graphics::text::cosmic_text::Align;
+use iced::widget::shader::wgpu::core::command::QueryError::Use;
 use rfd::FileHandle;
 use sysinfo::{get_current_pid, Pid};
 use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
@@ -37,6 +39,12 @@ pub enum Message {
     UpdateVolumeFadeInOutDurationSlider(f64),
 }
 
+#[derive(PartialEq, Debug, Clone)]
+enum UsedTrackHandle {
+    Primary,
+    Secondary,
+}
+
 #[derive(Debug, Clone)]
 pub enum Error {
     DialogClosed,
@@ -48,8 +56,10 @@ pub struct Multiplayer {
     audio_manager: AudioManager,
     primary_track_handle: TrackHandle,
     secondary_track_handle: TrackHandle,
+    used_track_handle: UsedTrackHandle,
     currently_playing_static_sound_handle: Option<StaticSoundHandle>,
-    volume_tweener: TweenerHandle,
+    primary_volume_tweener: TweenerHandle,
+    secondary_volume_tweener: TweenerHandle,
     playlist: MultiplayerPlaylist,
     playback_position: f64,
     fade_in_duration: u64,
@@ -92,29 +102,44 @@ impl Default for Multiplayer {
         });
 
         let mut audio_manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default()).unwrap();
-        let mut tweener = audio_manager.add_modulator(
+        let mut primary_tweener = audio_manager.add_modulator(
             TweenerBuilder {
-                initial_value: 0.0,
+                initial_value: 1.0,
             }
         ).unwrap();
-        let builder = TrackBuilder::new().volume(Value::FromModulator {
-            id: tweener.id(),
+        let mut secondary_tweener = audio_manager.add_modulator(
+            TweenerBuilder {
+                initial_value: 1.0,
+            }
+        ).unwrap();
+        let primary_builder = TrackBuilder::new().volume(Value::FromModulator {
+            id: primary_tweener.id(),
             mapping: Mapping {
                 input_range: (0.0, 1.0),
                 output_range: (Decibels::SILENCE, Decibels::IDENTITY),
-                easing: Easing::InOutPowi(1),
+                easing: Easing::OutPowi(3),
             },
         });
-        let mut primary_track = audio_manager.add_sub_track(builder).unwrap();
-        let mut secondary_track = audio_manager.add_sub_track(TrackBuilder::default()).unwrap();
+        let secondary_builder = TrackBuilder::new().volume(Value::FromModulator {
+            id: secondary_tweener.id(),
+            mapping: Mapping {
+                input_range: (0.0, 1.0),
+                output_range: (Decibels::SILENCE, Decibels::IDENTITY),
+                easing: Easing::OutPowi(3),
+            },
+        });
+        let mut primary_track = audio_manager.add_sub_track(primary_builder).unwrap();
+        let mut secondary_track = audio_manager.add_sub_track(secondary_builder).unwrap();
 
         Self {
             is_loading: false,
             audio_manager: audio_manager,
             primary_track_handle: primary_track,
             secondary_track_handle: secondary_track,
+            used_track_handle: UsedTrackHandle::Primary,
             currently_playing_static_sound_handle: None,
-            volume_tweener: tweener,
+            primary_volume_tweener: primary_tweener,
+            secondary_volume_tweener: secondary_tweener,
             playlist: MultiplayerPlaylist::new(),
             playback_position: 0.0,
             fade_in_duration: 600,
@@ -126,6 +151,34 @@ impl Default for Multiplayer {
 }
 
 impl Multiplayer {
+
+    fn get_used_track_handle(&mut self) -> &mut TrackHandle {
+        match self.used_track_handle {
+            UsedTrackHandle::Primary => &mut self.primary_track_handle,
+            UsedTrackHandle::Secondary => &mut self.secondary_track_handle,
+        }
+    }
+
+    fn get_unused_track_handle(&mut self) -> &mut TrackHandle {
+        match self.used_track_handle {
+            UsedTrackHandle::Primary => &mut self.secondary_track_handle,
+            UsedTrackHandle::Secondary => &mut self.primary_track_handle,
+        }
+    }
+    
+    fn get_used_volume_tweener(&mut self) -> &mut TweenerHandle {
+        match self.used_track_handle {
+            UsedTrackHandle::Primary => &mut self.primary_volume_tweener,
+            UsedTrackHandle::Secondary => &mut self.secondary_volume_tweener,
+        }
+    }
+    
+    fn get_unused_volume_tweener(&mut self) -> &mut TweenerHandle {
+        match self.used_track_handle {
+            UsedTrackHandle::Primary => &mut self.secondary_volume_tweener,
+            UsedTrackHandle::Secondary => &mut self.primary_volume_tweener,
+        }
+    }
 
     pub fn subscription(&self) -> Subscription<Message> {
         if self.audio_seek_dragged {
@@ -263,26 +316,57 @@ impl Multiplayer {
                                 }
                                 let static_sound_data = self.playlist.get_track(index).data
                                     .start_position(PlaybackPosition::Seconds(self.playback_position))
-                                    .loop_region(..)
-                                    .fade_in_tween(Tween {
-                                        start_time: StartTime::Immediate,
-                                        duration: Duration::from_millis(self.fade_in_duration),
-                                        easing: Easing::Linear,
-                                    });
-
-                                self.currently_playing_static_sound_handle = Option::from(self.primary_track_handle.play(static_sound_data).unwrap());
-                                self.volume_tweener.set(
-                                    new_volume,
-                                    Tween {
-                                        start_time: StartTime::Immediate,
-                                        duration: self.volume_fade_in_out_duration,
-                                        easing: Easing::Linear,
-                                    });
+                                    .loop_region(..);
+                                    // .fade_in_tween(
+                                    //     Tween {
+                                    //         start_time: StartTime::Immediate,
+                                    //         duration: Duration::from_millis(self.fade_in_duration),
+                                    //         easing: Easing::Linear, 
+                                    //     }
+                                    // );
+                                if self.used_track_handle == UsedTrackHandle::Primary {
+                                    self.primary_volume_tweener.set(
+                                        0.0,
+                                        Tween {
+                                            start_time: StartTime::Immediate,
+                                            duration: Duration::from_millis(self.fade_out_duration),
+                                            easing: Easing::Linear,
+                                        });
+                                }
+                                else {
+                                    self.secondary_volume_tweener.set(
+                                        0.0,
+                                        Tween {
+                                            start_time: StartTime::Immediate,
+                                            duration: Duration::from_millis(self.fade_out_duration),
+                                            easing: Easing::Linear,
+                                        });
+                                }
+                                self.currently_playing_static_sound_handle = Option::from(self.get_unused_track_handle().play(static_sound_data).unwrap());
+                                if self.used_track_handle == UsedTrackHandle::Primary {
+                                    self.secondary_volume_tweener.set(
+                                        new_volume,
+                                        Tween {
+                                            start_time: StartTime::Immediate,
+                                            duration: Duration::from_millis(self.fade_in_duration),
+                                            easing: Easing::Linear,
+                                        });
+                                }
+                                else {
+                                    self.primary_volume_tweener.set(
+                                        new_volume,
+                                        Tween {
+                                            start_time: StartTime::Immediate,
+                                            duration: Duration::from_millis(self.fade_in_duration),
+                                            easing: Easing::Linear,
+                                        });
+                                }
+                                self.used_track_handle = if self.used_track_handle == UsedTrackHandle::Primary { UsedTrackHandle::Secondary } else { UsedTrackHandle::Primary };
                             }
                             MultiplayerTrackMessage::UpdateVolumeSlider(new_volume) => {
                                 self.playlist.tracks[index].volume = new_volume;
                                 if self.playlist.current_track.is_some_and(|current_track| current_track == index) {
-                                    self.volume_tweener.set(
+                                    self.primary_volume_tweener.set(
                                         new_volume,
                                         Tween {
                                             start_time: StartTime::Immediate,
@@ -391,7 +475,7 @@ impl Multiplayer {
         )
             .center_x(Fill)
             .padding([6, 40]);
-        
+
         let controls = row![
             action(
                 open_icon(),
