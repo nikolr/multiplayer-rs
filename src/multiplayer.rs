@@ -75,7 +75,7 @@ impl Default for Multiplayer {
             std::sync::mpsc::SyncSender<Vec<u8>>,
             std::sync::mpsc::Receiver<Vec<u8>>,
         ) = mpsc::sync_channel(2);
-        let chunksize = 4096;
+        let chunksize = 64;
 
         // Capture
         let _handle = thread::Builder::new()
@@ -94,8 +94,8 @@ impl Default for Multiplayer {
                 match rx_capt.recv() {
                     Ok(chunk) => {
                         println!("Send Chunk with len: {}", chunk.len());
-                        // udp_socket.send_to(&chunk, "127.0.0.1:9476").unwrap();
-                        outfile.write_all(&chunk).unwrap();
+                        udp_socket.send_to(&chunk, "127.0.0.1:9476").unwrap();
+                        // outfile.write_all(&chunk).unwrap();
                     }
                     Err(err) => {
                         println!("Error: {}", err);

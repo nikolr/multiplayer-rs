@@ -1,23 +1,12 @@
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::{FromSample, Sample, SizedSample};
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fmt::Debug;
-use std::fs::File;
-use std::io::{BufReader, Read};
 use std::net::UdpSocket;
 use std::thread;
 use std::thread::sleep;
 use std::time::Duration;
-use cpal::{FromSample, Sample, SizedSample};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use fundsp::hacker::{pan, pink};
-use rubato::{SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction};
-use serde::{Deserialize, Serialize};
-use symphonia::core::codecs::{CodecParameters, CodecRegistry, CodecType, Decoder, DecoderOptions, CODEC_TYPE_NULL, CODEC_TYPE_PCM_F32LE};
-use symphonia::core::conv::IntoSample;
-use symphonia::core::formats::FormatOptions;
-use symphonia::core::io::{MediaSourceStream, ReadOnlySource};
-use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
-use symphonia::default::codecs::PcmDecoder;
 
 fn main() {
     println!("Hello, world!");
@@ -46,54 +35,55 @@ fn run<T>(device: cpal::Device, config: cpal::StreamConfig, socket: UdpSocket) -
 where
     T: SizedSample + FromSample<f32> + std::fmt::Debug,
 {
-    let file = std::fs::File::open("test.raw")?;
-    // let mut reader = std::io::BufReader::new(file);
-    // let mut buf = [0u8; 8];
-    let contents = std::fs::read("test.raw")?;
-    // while reader.read(&mut buf)? > 0 {
-    //     reader.read(&mut buf)?;
-    //     // println!("read {} bytes", buf.len());
-    //     // println!("{:?}", buf);
-    // }
-    
-    let sample_format = SampleFormat::Float32;
-    let mut samples = sample_format.to_float_samples(contents.as_slice())?;
-    let mut sample_deque = VecDeque::from(samples);
-    // for sample in samples.iter_mut() {
-    //     if sample.is_nan() {
-    //         println!("nan");
-    //     }
-    //     if sample.is_infinite() {
-    //         println!("infinite");
-    //     }
-    //     if sample.abs() > 1.0 {
-    //         println!("abs > 1.0");
-    //     }
-    // }
-    // println!("samples: {:?}", samples);
+    // let contents = std::fs::read("test.raw")?;
+    // let sample_format = SampleFormat::Float32;
+    // let mut samples = sample_format.to_float_samples(contents.as_slice())?;
+    // let mut sample_deque = VecDeque::from(samples);
 
     let sample_rate = config.sample_rate.0 as f32;
     let channels = config.channels as usize;
     println!("sample rate: {}", sample_rate);
     println!("channels: {}", channels);
+    
+    let mut socket_buf = [0u8; 512];
+    let mut sample_deque: VecDeque<f32> = VecDeque::new();
 
-    // This needs to be made into its own function
-    // let mut next_value = move || get_next_value::<T>(&socket);
-    let mut next_value = move || sample_deque.pop_front().unwrap_or(0.0);
-    println!("next value: {}", next_value());
-    let err_fn = |err| eprintln!("an error occurred on stream: {}", err);
-    let stream = device.build_output_stream(
-        &config,
-        move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
-            write_data(data, channels, &mut next_value)
-        },
-        err_fn,
-        None,
-    )?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        loop {
+            socket.recv(&mut socket_buf).unwrap();
+            let samples = SampleFormat::Float32.to_float_samples(&socket_buf).unwrap();
+            sample_deque.extend(samples);
+            while let Some(value) = sample_deque.pop_front() {
+                tx.send(value).unwrap();
+            }
+        }
+    });
 
-    stream.play()?;
-    thread::sleep(Duration::from_secs(10));
+    thread::spawn(move || {
+        let mut next_value = move || rx.try_recv().unwrap_or(0.0);
+        println!("next value: {}", next_value());
+        let err_fn = |err| eprintln!("an error occurred on stream: {}", err);
+        let stream = device.build_output_stream(
+            &config,
+            move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
+                write_data(data, channels, &mut next_value)
+            },
+            err_fn,
+            None,
+        ).unwrap();
+        stream.play().unwrap();
+        loop {
+            thread::sleep(Duration::from_millis(1));
+        }
+    });
     Ok(())
+}
+
+fn next_value(buf: &mut [u8], udp_socket: &UdpSocket) -> f32 {
+    udp_socket.recv(buf).unwrap();
+    println!("next value: {:#?}", buf);
+    return 0.0;
 }
 
 fn write_data<T>(output: &mut [T], channels: usize, next_sample: &mut dyn FnMut() -> f32)
