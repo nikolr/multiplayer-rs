@@ -4,7 +4,7 @@ use multiplayer::multiplayer::Multiplayer;
 fn main() -> iced::Result {
     iced::application("Multiplayer", Multiplayer::update, Multiplayer::view)
         .theme(theme)
-        .font(include_bytes!("../../assets/fonts/icons.ttf").as_slice())
+        .font(include_bytes!("../../../assets/fonts/icons.ttf").as_slice())
         .default_font(Font::MONOSPACE)
         .subscription(Multiplayer::subscription)
         .run()

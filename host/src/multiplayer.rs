@@ -86,7 +86,7 @@ impl Default for Multiplayer {
                 }
             });
 
-        let mut outfile = File::create("test.raw").unwrap();
+        let mut outfile = File::create("../../test.raw").unwrap();
         let udp_socket = UdpSocket::bind("127.0.0.1:9475").unwrap();
 
         thread::spawn(move || {

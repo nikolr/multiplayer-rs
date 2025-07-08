@@ -1,6 +1,5 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample, SizedSample};
-use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::net::UdpSocket;
@@ -101,7 +100,7 @@ where
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct AudioFormat {
     /// Number of channels in the audio
     pub channels: usize,

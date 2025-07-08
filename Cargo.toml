@@ -1,7 +1,6 @@
-[package]
-name = "multiplayer"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+resolver = "3"
+members = ["host", "client"]
 
 [profile.dev.package."*"]
 opt-level = 3
@@ -14,17 +13,3 @@ strip = "debuginfo"
 
 [build]
 rustflags = ["-C", "target-cpu=native"]
-
-[dependencies]
-iced = { version = "0.13.1", default-features = false, features = ["default", "smol"]}
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.140"
-iced_aw = { version = "0.12.2" }
-rfd = "0.15.3"
-wasapi = "0.19.0"
-sysinfo = "0.35.2"
-kira = "0.10.8"
-symphonia = { version = "0.5.4", features = ['pcm','mp3','wav','isomp4','aac','alac'] }
-anyhow = "1.0.98"
-cpal = "0.16.0"
-bytemuck = "1.23.1"
