@@ -10,7 +10,12 @@ use std::time::Duration;
 fn main() {
     println!("Hello, world!");
     let socket = UdpSocket::bind("127.0.0.1:9476").unwrap();
-    socket.connect("127.0.0.1:9475").unwrap();
+    loop {
+        if let Ok(()) = socket.connect("127.0.0.1:9475") {
+            println!("connected");
+            break;
+        }
+    }
 
     let host = cpal::default_host();
 

@@ -87,20 +87,32 @@ impl Default for Multiplayer {
             });
 
         let mut outfile = File::create("../../test.raw").unwrap();
-        let udp_socket = UdpSocket::bind("127.0.0.1:9475").unwrap();
+        let udp_socket = UdpSocket::bind("192.168.0.31:9475").unwrap();
 
         thread::spawn(move || {
             loop {
                 match rx_capt.recv() {
                     Ok(chunk) => {
-                        println!("Send Chunk with len: {}", chunk.len());
-                        udp_socket.send_to(&chunk, "127.0.0.1:9476").unwrap();
+                        if chunk == vec![0; 512] {
+                            println!("Chunk is empty");
+                            // thread::sleep(Duration::from_millis(1));
+                            continue;
+                        }
+                        match udp_socket.send_to(&chunk, "192.168.0.45:9476") {
+                            Ok(length) => {
+                                // println!("Sent {} bytes", length);
+                            }, 
+                            Err(_) => {
+                                // println!("Error sending chunk");
+                            },
+                        }
                         // outfile.write_all(&chunk).unwrap();
                     }
                     Err(err) => {
-                        println!("Error: {}", err);
+                        // println!("Error: {}", err);
                     }
                 }
+                // thread::sleep(Duration::from_millis(1));
             }
         });
 
@@ -703,7 +715,7 @@ fn capture_loop(
 ) -> Result<(), Box<dyn error::Error>> {
     initialize_mta().ok().unwrap();
 
-    let desired_format = WaveFormat::new(32, 32, &SampleType::Float, 48000, 2, None);
+    let desired_format = WaveFormat::new(32, 32, &SampleType::Float, 44100, 2, None);
     let blockalign = desired_format.get_blockalign();
     let autoconvert = true;
     let include_tree = true;
