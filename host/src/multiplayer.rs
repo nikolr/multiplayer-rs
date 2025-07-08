@@ -4,7 +4,7 @@ use iced::widget::{button, center, column, container, row, slider, text, tooltip
 use iced::{Alignment, Element, Fill, Font, Subscription, Task};
 use kira::modulator::tweener::{TweenerBuilder, TweenerHandle};
 use kira::sound::static_sound::StaticSoundHandle;
-use kira::sound::{FromFileError, PlaybackPosition, PlaybackState};
+use kira::sound::{PlaybackPosition, PlaybackState};
 use kira::track::{TrackBuilder, TrackHandle};
 use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Easing, Mapping, StartTime, Tween, Value};
 use rfd::FileHandle;
@@ -12,10 +12,9 @@ use std::cmp::PartialEq;
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::Write;
-use std::sync::mpsc;
+use std::net::UdpSocket;
 use std::time::Duration;
 use std::{error, io, thread};
-use std::net::UdpSocket;
 use sysinfo::{get_current_pid, Pid};
 use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
 
@@ -74,10 +73,9 @@ impl Default for Multiplayer {
         let (tx_capt, rx_capt): (
             std::sync::mpsc::SyncSender<Vec<u8>>,
             std::sync::mpsc::Receiver<Vec<u8>>,
-        ) = mpsc::sync_channel(2);
+        ) = std::sync::mpsc::sync_channel(2);
         let chunksize = 64;
 
-        // Capture
         let _handle = thread::Builder::new()
             .name("Capture".to_string())
             .spawn(move || {
@@ -94,37 +92,27 @@ impl Default for Multiplayer {
                 match rx_capt.recv() {
                     Ok(chunk) => {
                         if chunk == vec![0; 512] {
-                            println!("Chunk is empty");
-                            // thread::sleep(Duration::from_millis(1));
                             continue;
                         }
                         match udp_socket.send_to(&chunk, "192.168.0.45:9476") {
-                            Ok(length) => {
-                                // println!("Sent {} bytes", length);
-                            }, 
-                            Err(_) => {
-                                // println!("Error sending chunk");
-                            },
+                            Ok(_length) => {},
+                            Err(_) => {},
                         }
-                        // outfile.write_all(&chunk).unwrap();
                     }
-                    Err(err) => {
-                        // println!("Error: {}", err);
-                    }
+                    Err(_err) => {}
                 }
-                // thread::sleep(Duration::from_millis(1));
             }
         });
 
         let mut audio_manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default()).unwrap();
         let mut primary_tweener = audio_manager.add_modulator(
             TweenerBuilder {
-                initial_value: 1.0,
+                initial_value: 0.0,
             }
         ).unwrap();
         let mut secondary_tweener = audio_manager.add_modulator(
             TweenerBuilder {
-                initial_value: 1.0,
+                initial_value: 0.0,
             }
         ).unwrap();
         let primary_builder = TrackBuilder::new().volume(Value::FromModulator {
@@ -273,7 +261,6 @@ impl Multiplayer {
             },
 
             Message::PlaylistSavedToFile(_) => {
-                println!("Playlist Saved");
                 self.is_loading = false;
                 Task::none()
             }
@@ -287,7 +274,7 @@ impl Multiplayer {
                                     return Task::none();
                                 }
                                 self.playlist.current_track = Some(index);
-                                let new_volume = match self.playlist.get_current_track() {
+                                let new_volume = match self.playlist.get_track(index) {
                                     None => 1.0,
                                     Some(track) => track.volume,
                                 };
@@ -314,9 +301,15 @@ impl Multiplayer {
                                         easing: Easing::Linear,
                                     });
                                 }
-                                let static_sound_data = self.playlist.get_track(index).data
-                                    .start_position(PlaybackPosition::Seconds(self.playback_position))
-                                    .loop_region(..);
+                                let static_sound_data = match self.playlist.get_track(index) {
+                                    None => return Task::none(),
+                                    Some(track) => { 
+                                        track.data
+                                            .start_position(PlaybackPosition::Seconds(self.playback_position))
+                                            .loop_region(..)
+                                        
+                                    },
+                                };
                                     // .fade_in_tween(
                                     //     Tween {
                                     //         start_time: StartTime::Immediate,
@@ -407,13 +400,11 @@ impl Multiplayer {
                             MultiplayerTrackMessage::MoveTrackUp => {
                                 if index != 0 {
                                     self.playlist.swap_tracks(index, index - 1);
-                                    println!("Move Track Up");
                                 }
                             },
                             MultiplayerTrackMessage::MoveTrackDown => {
                                 if index != self.playlist.tracks.len() - 1 {
                                     self.playlist.swap_tracks(index, index + 1);
-                                    println!("Move Track Down");
                                 }
                             },
                         }
@@ -424,14 +415,12 @@ impl Multiplayer {
             },
             Message::UpdatePlaybackPositionSlider(slider_position) => {
                 self.audio_seek_dragged = true;
-                println!("Update Slider: {:?}", slider_position);
                 self.playback_position = slider_position;
 
                 Task::none()
             },
             Message::SeekToPlaybackPosition => {
                 if let Some(handle) = self.currently_playing_static_sound_handle.as_mut() {
-                    println!("Seek Audio: {:?}", self.playback_position);
                     handle.seek_to(self.playback_position);
                 }
                 self.audio_seek_dragged = false;
@@ -440,7 +429,6 @@ impl Multiplayer {
             },
             Message::TickPlaybackPosition => {
                 if let Some(handle) = &self.currently_playing_static_sound_handle {
-                    println!("Update Time: {:?}", handle.position());
                     self.playback_position = handle.position();
                 }
 
@@ -539,7 +527,7 @@ impl Multiplayer {
 
         let controls = row![
             action(
-                open_icon(),
+                open_file_icon(),
                 "Open file",
                 (!self.is_loading).then_some(Message::OpenFiles)
             ),
@@ -692,6 +680,10 @@ fn action<'a, Message: Clone + 'a>(
     }
 }
 
+fn open_file_icon<'a, Message>() -> Element<'a, Message> {
+    icon('\u{0e800}')
+}
+
 fn save_icon<'a, Message>() -> Element<'a, Message> {
     icon('\u{0e801}')
 }
@@ -706,8 +698,6 @@ fn icon<'a, Message>(codepoint: char) -> Element<'a, Message> {
     text(codepoint).font(ICON_FONT).into()
 }
 
-
-// Capture loop, capture samples and send in chunks of "chunksize" frames to channel
 fn capture_loop(
     tx_capt: std::sync::mpsc::SyncSender<Vec<u8>>,
     chunksize: usize,
@@ -731,7 +721,6 @@ fn capture_loop(
 
     let capture_client = audio_client.get_audiocaptureclient().unwrap();
 
-    // just eat the reallocation because querying the buffer size gives massive values.
     let mut sample_queue: VecDeque<u8> = VecDeque::new();
 
     audio_client.start_stream().unwrap();

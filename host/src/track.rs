@@ -52,7 +52,6 @@ impl MultiplayerTrack {
     }
     
     pub fn view(&self, currently_playing: bool) -> Element<MultiplayerTrackMessage> {
-        println!("{:?}", currently_playing);
         let audio_slider: Container<MultiplayerTrackMessage> = container(
             slider(
                 0.0..=1.0,
@@ -127,8 +126,11 @@ impl MultiplayerPlaylist {
         self.tracks.remove(index);
     }
     
-    pub fn get_track(&self, index: usize) -> &MultiplayerTrack {
-        &self.tracks[index]
+    pub fn get_track(&self, index: usize) -> Option<&MultiplayerTrack> {
+        if index >= self.tracks.len() {
+            return None;
+        }
+        Some(&self.tracks[index])
     }
     
     pub fn swap_tracks(&mut self, index1: usize, index2: usize) {
