@@ -86,7 +86,7 @@ impl Default for Multiplayer {
                 }
             });
 
-        // let mut outfile = File::create("recorded_u8.raw").unwrap();
+        let mut outfile = File::create("test.raw").unwrap();
         let udp_socket = UdpSocket::bind("127.0.0.1:9475").unwrap();
 
         thread::spawn(move || {
@@ -94,10 +94,11 @@ impl Default for Multiplayer {
                 match rx_capt.recv() {
                     Ok(chunk) => {
                         println!("Send Chunk with len: {}", chunk.len());
-                        udp_socket.send_to(&chunk, "127.0.0.1:9476").unwrap();
+                        // udp_socket.send_to(&chunk, "127.0.0.1:9476").unwrap();
+                        outfile.write_all(&chunk).unwrap();
                     }
                     Err(err) => {
-
+                        println!("Error: {}", err);
                     }
                 }
             }
@@ -702,7 +703,7 @@ fn capture_loop(
 ) -> Result<(), Box<dyn error::Error>> {
     initialize_mta().ok().unwrap();
 
-    let desired_format = WaveFormat::new(8, 8, &SampleType::Int, 44100, 2, None);
+    let desired_format = WaveFormat::new(32, 32, &SampleType::Float, 48000, 2, None);
     let blockalign = desired_format.get_blockalign();
     let autoconvert = true;
     let include_tree = true;

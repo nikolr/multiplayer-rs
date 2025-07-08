@@ -24,3 +24,7 @@ rfd = "0.15.3"
 wasapi = "0.19.0"
 sysinfo = "0.35.2"
 kira = "0.10.8"
+symphonia = { version = "0.5.4", features = ['pcm','mp3','wav','isomp4','aac','alac'] }
+anyhow = "1.0.98"
+cpal = "0.16.0"
+bytemuck = "1.23.1"
