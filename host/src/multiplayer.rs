@@ -97,7 +97,9 @@ impl Default for Multiplayer {
                                 continue;
                             }
                             match udp_socket.send_to(&chunk, "192.168.0.45:9476") {
-                                Ok(_length) => {},
+                                Ok(_length) => {
+                                    println!("Sent chunk with length {}", _length);
+                                },
                                 Err(_) => {},
                             }
                         }
