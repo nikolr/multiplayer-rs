@@ -736,18 +736,11 @@ fn capture_loop(
             for element in chunk.iter_mut() {
                 *element = sample_queue.pop_front().unwrap();
             }
-            println!("Chunk len {}", chunk.len());
             let mut opus_frame = chunk.chunks_exact_mut(4).map(|chunk| {
                 f32::from_le_bytes(chunk[..4].try_into().unwrap())
             }).collect::<Vec<f32>>();
-            // opus_frame.truncate(1920);
-            println!("Opus frame len {}", opus_frame.len());
-            println!("Frame size {:?}", opus_frame.len() / 2);
-            println!("Max data bytes: {:#?}", opus_encoder_buffer.len());
             match opus_encoder.encode_vec_float(opus_frame.as_slice(), 240) {
                 Ok(buf) => {
-                    println!("buf len {}", buf.len());
-                    println!("buf: {:?}", buf);
                     tx_capt.send(buf).unwrap();
                 }
                 Err(error) => {
