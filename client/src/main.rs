@@ -68,12 +68,12 @@ where
     println!("sample rate: {}", sample_rate);
     println!("channels: {}", channels);
     
-    let mut socket_buf = [0u8; 4000];
+    let mut socket_buf = [0u8; 128];
     let mut sample_deque: VecDeque<f32> = VecDeque::new();
 
     let (tx, rx) = std::sync::mpsc::channel();
     let mut opus_decoder = opus::Decoder::new(48000, Stereo)?;
-    let mut opus_decoder_buffer = [0f32; 99999];
+    let mut opus_decoder_buffer = [0f32; 960];
     thread::spawn(move || {
         loop {
             socket.recv(&mut socket_buf).unwrap();
