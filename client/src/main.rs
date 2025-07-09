@@ -68,28 +68,28 @@ where
     println!("sample rate: {}", sample_rate);
     println!("channels: {}", channels);
     
-    let mut socket_buf = [0u8; 128];
+    let mut socket_buf = [0u8; 960];
     let mut sample_deque: VecDeque<f32> = VecDeque::new();
 
     let (tx, rx) = std::sync::mpsc::channel();
     let mut opus_decoder = opus::Decoder::new(48000, Stereo)?;
-    let mut opus_decoder_buffer = [0f32; 960];
+    let mut opus_decoder_buffer = [0f32; 99999];
     thread::spawn(move || {
         loop {
             socket.recv(&mut socket_buf).unwrap();
             // let samples = SampleFormat::Float32.to_float_samples(&socket_buf).unwrap();
-            opus_decoder.decode_float(&socket_buf, opus_decoder_buffer.as_mut_slice(), false).unwrap();
-            // let samples = opus_decoder_buffer.iter().map(|x| x.clone()).collect::<Vec<_>>();
-            for i in 0..960 {
-                tx.send(opus_decoder_buffer[i]).unwrap();
-                opus_decoder_buffer[i] = 0.0;
-            }
-            // println!("{:?}", samples);
-            // opus_decoder_buffer = [0f32; 960];
-            // sample_deque.extend(samples);
-            // while let Some(value) = sample_deque.pop_front() {
-            //     tx.send(value).unwrap();
+            let result = opus_decoder.decode_float(&socket_buf, opus_decoder_buffer.as_mut_slice(), false).unwrap();
+            let mut samples = Vec::from(opus_decoder_buffer);
+            samples.truncate(result);
+            // for i in 0..960 {
+            //     tx.send(opus_decoder_buffer[i]).unwrap();
+            //     opus_decoder_buffer[i] = 0.0;
             // }
+            // println!("{:?}", samples);
+            sample_deque.extend(samples);
+            while let Some(value) = sample_deque.pop_front() {
+                tx.send(value).unwrap();
+            }
         }
     });
 
