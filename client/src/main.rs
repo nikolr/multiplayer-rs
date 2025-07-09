@@ -73,7 +73,7 @@ where
 
     let (tx, rx) = std::sync::mpsc::channel();
     let mut opus_decoder = opus::Decoder::new(48000, Stereo)?;
-    let mut opus_decoder_buffer = [0f32; 960];
+    let mut opus_decoder_buffer = [0f32; 1920];
     thread::spawn(move || {
         loop {
             socket.recv(&mut socket_buf).unwrap();
