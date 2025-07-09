@@ -1,10 +1,9 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{FromSample, Sample, SizedSample};
+use cpal::{FromSample, Sample, SampleRate, SizedSample};
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::net::UdpSocket;
 use std::thread;
-use std::thread::sleep;
 use std::time::Duration;
 
 fn main() {
@@ -22,10 +21,26 @@ fn main() {
         .default_output_device()
         .expect("Failed to find a default output device");
     let configs = device.supported_output_configs().unwrap();
-    for config in configs {
-        println!("{:?}", config);
-    }
-    let config = device.default_output_config().unwrap();
+    
+    // let config = device.default_output_config().unwrap();
+    // println!("{:?}", config);
+    let viable_configs = configs.filter(|config| {
+        config.sample_format() == cpal::SampleFormat::F32 || config.sample_format() == cpal::SampleFormat::I16 && config.channels() == 2
+    }).collect::<Vec<_>>();
+    let config_range = match viable_configs.get(0) {
+        Some(config) => config,
+        None => {
+            println!("No suitable config found");
+            return;
+        }   
+    };
+    let config = match config_range.try_with_sample_rate(SampleRate(48000)) {
+        Some(c) => c,
+        None => {
+            panic!("System does not support sample rate");
+        }
+    };
+    println!("{:?}", config);
 
     match config.sample_format() {
         cpal::SampleFormat::F32 => run::<f32>(device, config.into(), socket).unwrap(),
@@ -34,7 +49,7 @@ fn main() {
         _ => panic!("Unsupported format"),
     }
     loop {
-        sleep(Duration::from_millis(1000));
+        thread::sleep(Duration::from_millis(1000));
     }
 }
 
@@ -108,36 +123,12 @@ where
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct AudioFormat {
-    /// Number of channels in the audio
-    pub channels: usize,
-    /// Sample rate of the audio
-    pub sample_rate: usize,
-    /// Number of bits per sample
-    pub bit_depth: u16,
-    /// Whether audio uses floating point samples
-    pub is_float: bool,
-}
-
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum SampleFormat {
     /// Signed 16 bit integer
     Int16,
     /// 32 bit float
     Float32
-}
-
-impl AudioFormat {
-    fn sample_format(&self) -> anyhow::Result<SampleFormat> {
-        match (self.bit_depth, self.is_float) {
-            (16, false) => Ok(SampleFormat::Int16),
-            (32, true) => Ok(SampleFormat::Float32),
-            (bd, float) => {
-                anyhow::bail!("Unsupported format bit_depth: {} is_float: {}", bd, float)
-            }
-        }
-    }
 }
 
 impl SampleFormat {
