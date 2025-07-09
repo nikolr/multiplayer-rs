@@ -18,7 +18,7 @@ use std::{error, io, thread};
 use sysinfo::{get_current_pid, Pid};
 use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
 
-const CAPTURE_CHUNK_SIZE: usize = 480;
+const CAPTURE_CHUNK_SIZE: usize = 960;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -739,8 +739,9 @@ fn capture_loop(
             let mut opus_frame = chunk.chunks_exact_mut(4).map(|chunk| {
                 f32::from_le_bytes(chunk[..4].try_into().unwrap())
             }).collect::<Vec<f32>>();
-            match opus_encoder.encode_vec_float(opus_frame.as_slice(), 240) {
+            match opus_encoder.encode_vec_float(opus_frame.as_slice(), 600) {
                 Ok(buf) => {
+                    println!("Opus len {}", buf.len());
                     tx_capt.send(buf).unwrap();
                 }
                 Err(error) => {
