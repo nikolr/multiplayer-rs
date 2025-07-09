@@ -5,6 +5,7 @@ use std::fmt::Debug;
 use std::net::UdpSocket;
 use std::thread;
 use std::time::Duration;
+use opus::Channels::Stereo;
 
 fn main() {
     let socket = UdpSocket::bind("192.168.0.45:9476").unwrap();
@@ -25,7 +26,7 @@ fn main() {
     // let config = device.default_output_config().unwrap();
     // println!("{:?}", config);
     let viable_configs = configs.filter(|config| {
-        config.sample_format() == cpal::SampleFormat::F32 || config.sample_format() == cpal::SampleFormat::I16 && config.channels() == 2
+        (config.sample_format() == cpal::SampleFormat::F32 || config.sample_format() == cpal::SampleFormat::I16) && config.channels() == 2
     }).collect::<Vec<_>>();
     let config_range = match viable_configs.get(0) {
         Some(config) => config,
@@ -67,14 +68,19 @@ where
     println!("sample rate: {}", sample_rate);
     println!("channels: {}", channels);
     
-    let mut socket_buf = [0u8; 512];
+    let mut socket_buf = [0u8; 128];
     let mut sample_deque: VecDeque<f32> = VecDeque::new();
 
     let (tx, rx) = std::sync::mpsc::channel();
+    let mut opus_decoder = opus::Decoder::new(48000, Stereo)?;
+    let mut opus_decoder_buffer = [0f32; 512];
     thread::spawn(move || {
         loop {
             socket.recv(&mut socket_buf).unwrap();
-            let samples = SampleFormat::Float32.to_float_samples(&socket_buf).unwrap();
+            // let samples = SampleFormat::Float32.to_float_samples(&socket_buf).unwrap();
+            opus_decoder.decode_float(&socket_buf, opus_decoder_buffer.as_mut_slice(), false)?;
+            let samples = opus_decoder_buffer.iter().map(|x| x.clone()).collect::<Vec<_>>();
+            opus_decoder_buffer = [0f32; 512];
             sample_deque.extend(samples);
             while let Some(value) = sample_deque.pop_front() {
                 tx.send(value).unwrap();
@@ -100,12 +106,6 @@ where
         }
     });
     Ok(())
-}
-
-fn next_value(buf: &mut [u8], udp_socket: &UdpSocket) -> f32 {
-    udp_socket.recv(buf).unwrap();
-    println!("next value: {:#?}", buf);
-    return 0.0;
 }
 
 fn write_data<T>(output: &mut [T], channels: usize, next_sample: &mut dyn FnMut() -> f32)
@@ -143,7 +143,7 @@ impl SampleFormat {
         let len = self.bytes_per_sample();
         match self {
             Self::Int16 => Box::new(move |x: &[u8]| {
-                i16::from_be_bytes(x[..len].try_into().unwrap()) as f32 / i16::MAX as f32
+                i16::from_le_bytes((&x[..len]).try_into().unwrap()) as f32 / i16::MAX as f32
             }),
             Self::Float32 => Box::new(move |x: &[u8]| f32::from_le_bytes(x[..len].try_into().unwrap())),
         }

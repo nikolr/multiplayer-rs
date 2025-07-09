@@ -18,6 +18,8 @@ use std::{error, io, thread};
 use sysinfo::{get_current_pid, Pid};
 use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
 
+const CAPTURE_CHUNK_SIZE: usize = 480;
+
 #[derive(Debug, Clone)]
 pub enum Message {
     OpenFiles,
@@ -74,31 +76,31 @@ impl Default for Multiplayer {
             std::sync::mpsc::SyncSender<Vec<u8>>,
             std::sync::mpsc::Receiver<Vec<u8>>,
         ) = std::sync::mpsc::sync_channel(2);
-        let chunksize = 64;
 
         let _handle = thread::Builder::new()
             .name("Capture".to_string())
             .spawn(move || {
-                let result = capture_loop(tx_capt, chunksize, process_id);
+                let result = capture_loop(tx_capt, CAPTURE_CHUNK_SIZE, process_id);
                 if let Err(err) = result {
                 }
             });
 
-        let mut outfile = File::create("../../test.raw").unwrap();
+        let mut outfile = File::create("../test.opus").unwrap();
         let udp_socket = UdpSocket::bind("192.168.0.31:9475").unwrap();
 
         thread::spawn(move || {
             loop {
                 match rx_capt.recv() {
                     Ok(chunk) => {
-                        if chunk == vec![0; 512] {
-                            continue;
+                        // outfile.write_all(&chunk).unwrap();
+                            if chunk == vec![0; 512] {
+                                continue;
+                            }
+                            match udp_socket.send_to(&chunk, "192.168.0.45:9476") {
+                                Ok(_length) => {},
+                                Err(_) => {},
+                            }
                         }
-                        match udp_socket.send_to(&chunk, "192.168.0.45:9476") {
-                            Ok(_length) => {},
-                            Err(_) => {},
-                        }
-                    }
                     Err(_err) => {}
                 }
             }
@@ -705,7 +707,7 @@ fn capture_loop(
 ) -> Result<(), Box<dyn error::Error>> {
     initialize_mta().ok().unwrap();
 
-    let desired_format = WaveFormat::new(32, 32, &SampleType::Float, 44100, 2, None);
+    let desired_format = WaveFormat::new(32, 32, &SampleType::Float, 48000, 2, None);
     let blockalign = desired_format.get_blockalign();
     let autoconvert = true;
     let include_tree = true;
@@ -724,6 +726,9 @@ fn capture_loop(
     let mut sample_queue: VecDeque<u8> = VecDeque::new();
 
     audio_client.start_stream().unwrap();
+    
+    let mut opus_encoder = opus::Encoder::new(48000, opus::Channels::Stereo, opus::Application::Audio).unwrap();
+    let mut opus_encoder_buffer = vec![0u8; 215];
 
     loop {
         while sample_queue.len() > (blockalign as usize * chunksize) {
@@ -731,7 +736,36 @@ fn capture_loop(
             for element in chunk.iter_mut() {
                 *element = sample_queue.pop_front().unwrap();
             }
-            tx_capt.send(chunk).unwrap();
+            println!("Chunk len {}", chunk.len());
+            let mut opus_frame = chunk.chunks_exact_mut(4).map(|chunk| {
+                f32::from_le_bytes(chunk[..4].try_into().unwrap())
+            }).collect::<Vec<f32>>();
+            // opus_frame.truncate(1920);
+            println!("Opus frame len {}", opus_frame.len());
+            println!("Frame size {:?}", opus_frame.len() / 2);
+            println!("Max data bytes: {:#?}", opus_encoder_buffer.len());
+            match opus_encoder.encode_vec_float(opus_frame.as_slice(), 240) {
+                Ok(buf) => {
+                    println!("buf len {}", buf.len());
+                    println!("buf: {:?}", buf);
+                    tx_capt.send(buf).unwrap();
+                }
+                Err(error) => {
+                    println!("Error encoding: {:?}", error);
+                }
+            };
+            // match opus_encoder.encode_float(opus_frame.as_slice(), &mut opus_encoder_buffer) {
+            //     Ok(encoded_frame) => {
+            //         println!("Opus len {}", opus_encoder_buffer.len());
+            //         println!("opus_encoder_buffer: {:?}", opus_encoder_buffer);
+            //         tx_capt.send(opus_encoder_buffer.clone()).unwrap();
+            //     }
+            //     Err(e) => {
+            //         println!("Error encoding: {:?}", e);
+            //     }
+            // }
+            // println!("Opus len {}, and buffer: {:?}", opus_encoder_buffer.len(), opus_encoder_buffer);
+            // tx_capt.send(opus_encoder_buffer.clone()).unwrap();
         }
 
         let new_frames = capture_client.get_next_packet_size()?.unwrap_or(0);
