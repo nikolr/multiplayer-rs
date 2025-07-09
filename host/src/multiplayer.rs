@@ -303,11 +303,11 @@ impl Multiplayer {
                                 }
                                 let static_sound_data = match self.playlist.get_track(index) {
                                     None => return Task::none(),
-                                    Some(track) => { 
+                                    Some(track) => {
                                         track.data
                                             .start_position(PlaybackPosition::Seconds(self.playback_position))
                                             .loop_region(..)
-                                        
+
                                     },
                                 };
                                     // .fade_in_tween(

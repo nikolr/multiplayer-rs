@@ -8,9 +8,9 @@ use std::thread::sleep;
 use std::time::Duration;
 
 fn main() {
-    let socket = UdpSocket::bind("127.0.0.1:9476").unwrap();
+    let socket = UdpSocket::bind("192.168.0.45:9476").unwrap();
     loop {
-        if let Ok(()) = socket.connect("127.0.0.1:9475") {
+        if let Ok(()) = socket.connect("192.168.0.31:9475") {
             println!("connected");
             break;
         }
@@ -21,6 +21,10 @@ fn main() {
     let device = host
         .default_output_device()
         .expect("Failed to find a default output device");
+    let configs = device.supported_output_configs().unwrap();
+    for config in configs {
+        println!("{:?}", config);
+    }
     let config = device.default_output_config().unwrap();
 
     match config.sample_format() {
