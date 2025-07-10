@@ -15,10 +15,11 @@ use std::io::Write;
 use std::net::UdpSocket;
 use std::time::Duration;
 use std::{error, io, thread};
+use opus::Bitrate;
 use sysinfo::{get_current_pid, Pid};
 use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
 
-const CAPTURE_CHUNK_SIZE: usize = 960;
+const CAPTURE_CHUNK_SIZE: usize = 120;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -98,7 +99,6 @@ impl Default for Multiplayer {
                             }
                             match udp_socket.send_to(&chunk, "192.168.0.45:9476") {
                                 Ok(_length) => {
-                                    println!("Sent chunk with length {}", _length);
                                 },
                                 Err(_) => {},
                             }
@@ -730,6 +730,10 @@ fn capture_loop(
     audio_client.start_stream().unwrap();
     
     let mut opus_encoder = opus::Encoder::new(48000, opus::Channels::Stereo, opus::Application::Audio).unwrap();
+    println!("Opus encoder created with bitrate: {:#?}", opus_encoder.get_bitrate());
+    opus_encoder.set_bitrate(Bitrate::Max).unwrap();
+    println!("Opus encoder bitrate set to max: {:#?}", opus_encoder.get_bitrate());
+    opus_encoder.set_vbr(false).unwrap();
     let mut opus_encoder_buffer = vec![0u8; 215];
 
     loop {
@@ -738,13 +742,16 @@ fn capture_loop(
             for element in chunk.iter_mut() {
                 *element = sample_queue.pop_front().unwrap();
             }
-            let mut opus_frame = chunk.chunks_exact_mut(4).map(|chunk| {
-                f32::from_le_bytes(chunk[..4].try_into().unwrap())
-            }).collect::<Vec<f32>>();
-            println!("Opus len {}", opus_frame.len());
+            // let mut opus_frame = chunk.chunks_exact_mut(4).map(|chunk| {
+            //     f32::from_le_bytes(chunk[..4].try_into().unwrap())
+            // }).collect::<Vec<f32>>();
+            // println!("Chunk len: {:?}", chunk.len());
+            let opus_frame = SampleFormat::Float32.to_float_samples(chunk.as_mut_slice())?;
+            // println!("Opus frame len: {:?}", opus_frame.len());
             match opus_encoder.encode_vec_float(opus_frame.as_slice(), 600) {
                 Ok(buf) => {
-                    println!("Opus len {}", buf.len());
+                    println!("buf len {}", buf.len());
+                    // println!("buf: {:?}", buf);
                     tx_capt.send(buf).unwrap();
                 }
                 Err(error) => {
@@ -780,4 +787,42 @@ fn capture_loop(
         }
     }
     Ok(())
+}
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum SampleFormat {
+    /// Signed 16 bit integer
+    Int16,
+    /// 32 bit float
+    Float32
+}
+
+impl SampleFormat {
+    const fn bytes_per_sample(&self) -> usize {
+        match self {
+            Self::Int16 => 2,
+            Self::Float32 => 4,
+        }
+    }
+
+    fn to_float_fn(&self) -> Box<dyn Fn(&[u8]) -> f32> {
+        let len = self.bytes_per_sample();
+        match self {
+            Self::Int16 => Box::new(move |x: &[u8]| {
+                i16::from_le_bytes((&x[..len]).try_into().unwrap()) as f32 / i16::MAX as f32
+            }),
+            Self::Float32 => Box::new(move |x: &[u8]| f32::from_le_bytes(x[..len].try_into().unwrap())),
+        }
+    }
+
+    fn to_float_samples(&self, samples: &[u8]) -> anyhow::Result<Vec<f32>> {
+        let len = self.bytes_per_sample();
+        if samples.len() % len != 0 {
+            anyhow::bail!("Invalid number of samples {}", samples.len());
+        }
+
+        let conversion = self.to_float_fn();
+
+        let samples = samples.chunks(len).map(conversion).collect();
+        Ok(samples)
+    }
 }
