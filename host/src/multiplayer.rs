@@ -16,10 +16,13 @@ use std::net::UdpSocket;
 use std::time::Duration;
 use std::{error, io, thread};
 use opus::Bitrate;
+use opus::Error as OpusError;
+use opus::ErrorCode as OpusErrorCode;
 use sysinfo::{get_current_pid, Pid};
 use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
 
-const CAPTURE_CHUNK_SIZE: usize = 120;
+const CAPTURE_CHUNK_SIZE: usize = 480;
+const BIT_RATE: i32 = 64000;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -728,13 +731,12 @@ fn capture_loop(
     let mut sample_queue: VecDeque<u8> = VecDeque::new();
 
     audio_client.start_stream().unwrap();
-    
+
     let mut opus_encoder = opus::Encoder::new(48000, opus::Channels::Stereo, opus::Application::Audio).unwrap();
-    println!("Opus encoder created with bitrate: {:#?}", opus_encoder.get_bitrate());
-    opus_encoder.set_bitrate(Bitrate::Max).unwrap();
-    println!("Opus encoder bitrate set to max: {:#?}", opus_encoder.get_bitrate());
-    opus_encoder.set_vbr(false).unwrap();
-    let mut opus_encoder_buffer = vec![0u8; 215];
+    opus_encoder.set_bitrate(Bitrate::Bits(BIT_RATE)).unwrap();
+    // opus_encoder.set_vbr(false).unwrap();
+    let frame_size = (48000 / 1000 * 20) as usize;
+    println!("Frame size: {}", frame_size);
 
     loop {
         while sample_queue.len() > (blockalign as usize * chunksize) {
@@ -746,16 +748,29 @@ fn capture_loop(
             //     f32::from_le_bytes(chunk[..4].try_into().unwrap())
             // }).collect::<Vec<f32>>();
             // println!("Chunk len: {:?}", chunk.len());
-            let opus_frame = SampleFormat::Float32.to_float_samples(chunk.as_mut_slice())?;
-            // println!("Opus frame len: {:?}", opus_frame.len());
-            match opus_encoder.encode_vec_float(opus_frame.as_slice(), 600) {
+            let mut opus_frame = SampleFormat::Float32.to_float_samples(chunk.as_mut_slice())?;
+            println!("frame len: {:?}", opus_frame.len());
+
+            match opus_encoder.encode_vec_float(opus_frame.as_slice(), 80) {
                 Ok(buf) => {
                     println!("buf len {}", buf.len());
-                    // println!("buf: {:?}", buf);
+                    println!("buf: {:?}", buf);
                     tx_capt.send(buf).unwrap();
                 }
                 Err(error) => {
-                    println!("Error encoding: {:?}", error);
+                    match error.code() {
+                        OpusErrorCode::BufferTooSmall => {
+                            println!("Buffer too small");
+                        }
+                        OpusErrorCode::BadArg => {
+                            println!("Bad arg");
+                        }
+                        OpusErrorCode::InternalError => {
+                            println!("Internal error");
+                        }
+                        OpusErrorCode::InvalidState => {},
+                        _ => todo!()
+                    }
                 }
             };
             // match opus_encoder.encode_float(opus_frame.as_slice(), &mut opus_encoder_buffer) {
