@@ -58,11 +58,6 @@ fn run<T>(device: cpal::Device, config: cpal::StreamConfig, socket: UdpSocket) -
 where
     T: SizedSample + FromSample<f32> + std::fmt::Debug,
 {
-    // let contents = std::fs::read("test.raw")?;
-    // let sample_format = SampleFormat::Float32;
-    // let mut samples = sample_format.to_float_samples(contents.as_slice())?;
-    // let mut sample_deque = VecDeque::from(samples);
-
     let sample_rate = config.sample_rate.0 as f32;
     let channels = config.channels as usize;
     println!("sample rate: {}", sample_rate);
@@ -76,15 +71,15 @@ where
     let mut opus_decoder_buffer = [0f32; 960];
     thread::spawn(move || {
         loop {
-            let size = socket.peek(&mut socket_buf).unwrap();
-            println!("size: {}", size);
             socket.recv(&mut socket_buf).unwrap();
-            // let samples = SampleFormat::Float32.to_float_samples(&socket_buf).unwrap();
             match opus_decoder.decode_float(&socket_buf, opus_decoder_buffer.as_mut_slice(), false) {
                 Ok(result) => {
-                    let mut samples = Vec::from(opus_decoder_buffer);
-                    samples.truncate(result * channels);
-                    sample_deque.extend(samples);
+                    for i in 0..(result * channels) {
+                        sample_deque.push_back(opus_decoder_buffer[i]);
+                    }
+                    // let mut samples = Vec::from(opus_decoder_buffer);
+                    // samples.truncate(result * channels);
+                    // sample_deque.extend(samples);
                     while let Some(value) = sample_deque.pop_front() {
                         tx.send(value).unwrap();
                     }
@@ -102,7 +97,7 @@ where
         let stream = device.build_output_stream(
             &config,
             move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
-                write_data(data, channels, &mut next_value)
+                write_data(data, &mut next_value)
             },
             err_fn,
             None,
@@ -115,56 +110,11 @@ where
     Ok(())
 }
 
-fn write_data<T>(output: &mut [T], channels: usize, next_sample: &mut dyn FnMut() -> f32)
+fn write_data<T>(output: &mut [T], next_sample: &mut dyn FnMut() -> f32)
 where
     T: Sample + FromSample<f32> + Debug,
 {
-    // for frame in output.chunks_mut(channels) {
-    //     let value: T = T::from_sample(next_sample());
-    //     for sample in frame.iter_mut() {
-    //         *sample = value;
-    //     }
-    // }
     for sample in output.iter_mut() {
         *sample = T::from_sample(next_sample());
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum SampleFormat {
-    /// Signed 16 bit integer
-    Int16,
-    /// 32 bit float
-    Float32
-}
-
-impl SampleFormat {
-    const fn bytes_per_sample(&self) -> usize {
-        match self {
-            Self::Int16 => 2,
-            Self::Float32 => 4,
-        }
-    }
-    
-    fn to_float_fn(&self) -> Box<dyn Fn(&[u8]) -> f32> {
-        let len = self.bytes_per_sample();
-        match self {
-            Self::Int16 => Box::new(move |x: &[u8]| {
-                i16::from_le_bytes((&x[..len]).try_into().unwrap()) as f32 / i16::MAX as f32
-            }),
-            Self::Float32 => Box::new(move |x: &[u8]| f32::from_le_bytes(x[..len].try_into().unwrap())),
-        }
-    }
-    
-    fn to_float_samples(&self, samples: &[u8]) -> anyhow::Result<Vec<f32>> {
-        let len = self.bytes_per_sample();
-        if samples.len() % len != 0 {
-            anyhow::bail!("Invalid number of samples {}", samples.len());
-        }
-        
-        let conversion = self.to_float_fn();
-        
-        let samples = samples.chunks(len).map(conversion).collect();
-        Ok(samples)
     }
 }

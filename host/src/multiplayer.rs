@@ -734,9 +734,7 @@ fn capture_loop(
 
     let mut opus_encoder = opus::Encoder::new(48000, opus::Channels::Stereo, opus::Application::Audio).unwrap();
     opus_encoder.set_bitrate(Bitrate::Bits(BIT_RATE)).unwrap();
-    // opus_encoder.set_vbr(false).unwrap();
-    let frame_size = (48000 / 1000 * 20) as usize;
-    println!("Frame size: {}", frame_size);
+    // let frame_size = (48000 / 1000 * 20) as usize;
 
     loop {
         while sample_queue.len() > (blockalign as usize * chunksize) {
@@ -744,17 +742,9 @@ fn capture_loop(
             for element in chunk.iter_mut() {
                 *element = sample_queue.pop_front().unwrap();
             }
-            // let mut opus_frame = chunk.chunks_exact_mut(4).map(|chunk| {
-            //     f32::from_le_bytes(chunk[..4].try_into().unwrap())
-            // }).collect::<Vec<f32>>();
-            // println!("Chunk len: {:?}", chunk.len());
-            let mut opus_frame = SampleFormat::Float32.to_float_samples(chunk.as_mut_slice())?;
-            println!("frame len: {:?}", opus_frame.len());
-
+            let opus_frame = SampleFormat::Float32.to_float_samples(chunk.as_mut_slice())?;
             match opus_encoder.encode_vec_float(opus_frame.as_slice(), 80) {
                 Ok(buf) => {
-                    println!("buf len {}", buf.len());
-                    println!("buf: {:?}", buf);
                     tx_capt.send(buf).unwrap();
                 }
                 Err(error) => {
@@ -768,23 +758,13 @@ fn capture_loop(
                         OpusErrorCode::InternalError => {
                             println!("Internal error");
                         }
-                        OpusErrorCode::InvalidState => {},
+                        OpusErrorCode::InvalidState => {
+                            println!("Invalid state");
+                        },
                         _ => todo!()
                     }
                 }
             };
-            // match opus_encoder.encode_float(opus_frame.as_slice(), &mut opus_encoder_buffer) {
-            //     Ok(encoded_frame) => {
-            //         println!("Opus len {}", opus_encoder_buffer.len());
-            //         println!("opus_encoder_buffer: {:?}", opus_encoder_buffer);
-            //         tx_capt.send(opus_encoder_buffer.clone()).unwrap();
-            //     }
-            //     Err(e) => {
-            //         println!("Error encoding: {:?}", e);
-            //     }
-            // }
-            // println!("Opus len {}, and buffer: {:?}", opus_encoder_buffer.len(), opus_encoder_buffer);
-            // tx_capt.send(opus_encoder_buffer.clone()).unwrap();
         }
 
         let new_frames = capture_client.get_next_packet_size()?.unwrap_or(0);
