@@ -1,7 +1,6 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample, SampleRate, SizedSample};
 use std::collections::VecDeque;
-use std::fmt::Debug;
 use std::net::UdpSocket;
 use std::thread;
 use std::time::Duration;
@@ -23,8 +22,6 @@ fn main() {
         .expect("Failed to find a default output device");
     let configs = device.supported_output_configs().unwrap();
     
-    // let config = device.default_output_config().unwrap();
-    // println!("{:?}", config);
     let viable_configs = configs.filter(|config| {
         (config.sample_format() == cpal::SampleFormat::F32 || config.sample_format() == cpal::SampleFormat::I16) && config.channels() == 2
     }).collect::<Vec<_>>();
@@ -56,12 +53,10 @@ fn main() {
 
 fn run<T>(device: cpal::Device, config: cpal::StreamConfig, socket: UdpSocket) -> Result<(), anyhow::Error>
 where
-    T: SizedSample + FromSample<f32> + std::fmt::Debug,
+    T: SizedSample + FromSample<f32>,
 {
     let sample_rate = config.sample_rate.0 as f32;
     let channels = config.channels as usize;
-    println!("sample rate: {}", sample_rate);
-    println!("channels: {}", channels);
     
     let mut socket_buf = [0u8; 80];
     let mut sample_deque: VecDeque<f32> = VecDeque::new();
@@ -77,15 +72,12 @@ where
                     for i in 0..(result * channels) {
                         sample_deque.push_back(opus_decoder_buffer[i]);
                     }
-                    // let mut samples = Vec::from(opus_decoder_buffer);
-                    // samples.truncate(result * channels);
-                    // sample_deque.extend(samples);
                     while let Some(value) = sample_deque.pop_front() {
                         tx.send(value).unwrap();
                     }
                 },
-                Err(e) => println!("error: {}", e)
                 
+                Err(e) => println!("error: {}", e)
             };
         }
     });
@@ -112,7 +104,7 @@ where
 
 fn write_data<T>(output: &mut [T], next_sample: &mut dyn FnMut() -> f32)
 where
-    T: Sample + FromSample<f32> + Debug,
+    T: Sample + FromSample<f32>,
 {
     for sample in output.iter_mut() {
         *sample = T::from_sample(next_sample());

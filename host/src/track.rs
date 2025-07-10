@@ -6,7 +6,6 @@ use iced::widget::{button, column, container, row, scrollable, slider, text, Col
 use iced::{Element, Fill};
 use iced::Length;
 use kira::sound::static_sound::StaticSoundData;
-use kira::sound::FromFileError;
 use crate::multiplayer::Error::IoError;
 
 #[derive(Debug, Clone)]

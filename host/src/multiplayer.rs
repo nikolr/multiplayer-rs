@@ -10,13 +10,10 @@ use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Easing,
 use rfd::FileHandle;
 use std::cmp::PartialEq;
 use std::collections::VecDeque;
-use std::fs::File;
-use std::io::Write;
 use std::net::UdpSocket;
 use std::time::Duration;
 use std::{error, io, thread};
 use opus::Bitrate;
-use opus::Error as OpusError;
 use opus::ErrorCode as OpusErrorCode;
 use sysinfo::{get_current_pid, Pid};
 use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
@@ -69,7 +66,6 @@ pub struct Multiplayer {
     playback_position: f64,
     fade_in_duration: u64,
     fade_out_duration: u64,
-    volume_fade_in_out_duration: Duration,
     audio_seek_dragged: bool,
 }
 
@@ -85,21 +81,16 @@ impl Default for Multiplayer {
             .name("Capture".to_string())
             .spawn(move || {
                 let result = capture_loop(tx_capt, CAPTURE_CHUNK_SIZE, process_id);
-                if let Err(err) = result {
+                if let Err(_err) = result {
                 }
             });
 
-        let mut outfile = File::create("../test.opus").unwrap();
         let udp_socket = UdpSocket::bind("192.168.0.31:9475").unwrap();
 
         thread::spawn(move || {
             loop {
                 match rx_capt.recv() {
                     Ok(chunk) => {
-                        // outfile.write_all(&chunk).unwrap();
-                            if chunk == vec![0; 512] {
-                                continue;
-                            }
                             match udp_socket.send_to(&chunk, "192.168.0.45:9476") {
                                 Ok(_length) => {
                                 },
@@ -112,12 +103,12 @@ impl Default for Multiplayer {
         });
 
         let mut audio_manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default()).unwrap();
-        let mut primary_tweener = audio_manager.add_modulator(
+        let primary_tweener = audio_manager.add_modulator(
             TweenerBuilder {
                 initial_value: 0.0,
             }
         ).unwrap();
-        let mut secondary_tweener = audio_manager.add_modulator(
+        let secondary_tweener = audio_manager.add_modulator(
             TweenerBuilder {
                 initial_value: 0.0,
             }
@@ -138,8 +129,8 @@ impl Default for Multiplayer {
                 easing: Easing::OutPowi(3),
             },
         });
-        let mut primary_track = audio_manager.add_sub_track(primary_builder).unwrap();
-        let mut secondary_track = audio_manager.add_sub_track(secondary_builder).unwrap();
+        let primary_track = audio_manager.add_sub_track(primary_builder).unwrap();
+        let secondary_track = audio_manager.add_sub_track(secondary_builder).unwrap();
 
         Self {
             is_loading: false,
@@ -154,7 +145,6 @@ impl Default for Multiplayer {
             playback_position: 0.0,
             fade_in_duration: 600,
             fade_out_duration: 600,
-            volume_fade_in_out_duration: Duration::from_millis(1000),
             audio_seek_dragged: false,
         }
     }
@@ -317,13 +307,6 @@ impl Multiplayer {
 
                                     },
                                 };
-                                    // .fade_in_tween(
-                                    //     Tween {
-                                    //         start_time: StartTime::Immediate,
-                                    //         duration: Duration::from_millis(self.fade_in_duration),
-                                    //         easing: Easing::Linear,
-                                    //     }
-                                    // );
                                 if self.used_track_handle == UsedTrackHandle::Primary {
                                     self.primary_volume_tweener.set(
                                         0.0,
@@ -407,11 +390,33 @@ impl Multiplayer {
                             MultiplayerTrackMessage::MoveTrackUp => {
                                 if index != 0 {
                                     self.playlist.swap_tracks(index, index - 1);
+                                    match self.playlist.current_track {
+                                        Some(current_track)  => {
+                                            if current_track == index {
+                                                self.playlist.current_track = Some(index - 1);
+                                            }
+                                            else if current_track == index - 1 {
+                                                self.playlist.current_track = Some(index);
+                                            }
+                                        },
+                                        _ => {}
+                                    }
                                 }
                             },
                             MultiplayerTrackMessage::MoveTrackDown => {
                                 if index != self.playlist.tracks.len() - 1 {
                                     self.playlist.swap_tracks(index, index + 1);
+                                    match self.playlist.current_track {
+                                        Some(current_track)  => {
+                                            if current_track == index {
+                                                self.playlist.current_track = Some(index + 1);
+                                            }
+                                            else if current_track == index + 1 {
+                                                self.playlist.current_track = Some(index);
+                                            }
+                                        },
+                                        _ => {}
+                                    }
                                 }
                             },
                         }
@@ -785,16 +790,14 @@ fn capture_loop(
 }
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum SampleFormat {
-    /// Signed 16 bit integer
-    Int16,
-    /// 32 bit float
+    // Int16,
     Float32
 }
 
 impl SampleFormat {
     const fn bytes_per_sample(&self) -> usize {
         match self {
-            Self::Int16 => 2,
+            // Self::Int16 => 2,
             Self::Float32 => 4,
         }
     }
@@ -802,9 +805,9 @@ impl SampleFormat {
     fn to_float_fn(&self) -> Box<dyn Fn(&[u8]) -> f32> {
         let len = self.bytes_per_sample();
         match self {
-            Self::Int16 => Box::new(move |x: &[u8]| {
-                i16::from_le_bytes((&x[..len]).try_into().unwrap()) as f32 / i16::MAX as f32
-            }),
+            // Self::Int16 => Box::new(move |x: &[u8]| {
+            //     i16::from_le_bytes((&x[..len]).try_into().unwrap()) as f32 / i16::MAX as f32
+            // }),
             Self::Float32 => Box::new(move |x: &[u8]| f32::from_le_bytes(x[..len].try_into().unwrap())),
         }
     }
