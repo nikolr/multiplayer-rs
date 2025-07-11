@@ -74,7 +74,7 @@ impl MultiplayerTrack {
                     button("Reset").on_press(MultiplayerTrackMessage::Play(true)).height(32)
                 ).align_x(Horizontal::Left)
                 .padding([2, 4]),
-                text(format!("{}", self.path)).align_x(Horizontal::Center).width(Fill),
+                text(self.path.to_string()).align_x(Horizontal::Center).width(Fill),
                 column![
                     button("Remove").on_press(MultiplayerTrackMessage::Remove).height(32),
                 ].align_x(Horizontal::Right),
@@ -107,6 +107,12 @@ pub enum MultiplayerPlaylistMessage {
 pub struct MultiplayerPlaylist {
     pub tracks: Vec<MultiplayerTrack>,
     pub current_track: Option<usize>,
+}
+
+impl Default for MultiplayerPlaylist {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MultiplayerPlaylist {
@@ -151,7 +157,6 @@ impl MultiplayerPlaylist {
             .enumerate()
             .map(|(index, track)| {
                 track.map(move |message| MultiplayerPlaylistMessage::MultiplayerTrack(index, message))
-                    .into()
             })
             .collect();
         

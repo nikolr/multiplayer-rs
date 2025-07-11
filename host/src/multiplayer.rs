@@ -91,10 +91,7 @@ impl Default for Multiplayer {
             loop {
                 match rx_capt.recv() {
                     Ok(chunk) => {
-                            match udp_socket.send_to(&chunk, "192.168.0.45:9476") {
-                                Ok(_length) => {
-                                },
-                                Err(_) => {},
+                            if let Ok(_length) = udp_socket.send_to(&chunk, "192.168.0.45:9476") {
                             }
                         }
                     Err(_err) => {}
@@ -134,7 +131,7 @@ impl Default for Multiplayer {
 
         Self {
             is_loading: false,
-            audio_manager: audio_manager,
+            audio_manager,
             primary_track_handle: primary_track,
             secondary_track_handle: secondary_track,
             used_track_handle: UsedTrackHandle::Primary,
@@ -163,8 +160,8 @@ impl Multiplayer {
         if self.audio_seek_dragged {
             return Subscription::none()
         }
-        let time = iced::time::every(Duration::from_secs_f64(1.0)).map(|_| Message::TickPlaybackPosition);
-        Subscription::from(time)
+        
+        iced::time::every(Duration::from_secs_f64(1.0)).map(|_| Message::TickPlaybackPosition)
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -380,42 +377,34 @@ impl Multiplayer {
                                     self.currently_playing_static_sound_handle = None;
                                     self.playback_position = 0.0;
                                 }
-                                else {
-                                    if self.playlist.current_track.is_some() && index < self.playlist.current_track.unwrap() {
-                                        self.playlist.current_track = Some(self.playlist.current_track.unwrap() - 1);
-                                    }
+                                else if self.playlist.current_track.is_some() && index < self.playlist.current_track.unwrap() {
+                                    self.playlist.current_track = Some(self.playlist.current_track.unwrap() - 1);
                                 }
                                 self.playlist.remove_track(index);
                             },
                             MultiplayerTrackMessage::MoveTrackUp => {
                                 if index != 0 {
                                     self.playlist.swap_tracks(index, index - 1);
-                                    match self.playlist.current_track {
-                                        Some(current_track)  => {
-                                            if current_track == index {
-                                                self.playlist.current_track = Some(index - 1);
-                                            }
-                                            else if current_track == index - 1 {
-                                                self.playlist.current_track = Some(index);
-                                            }
-                                        },
-                                        _ => {}
+                                    if let Some(current_track) = self.playlist.current_track {
+                                        if current_track == index {
+                                            self.playlist.current_track = Some(index - 1);
+                                        }
+                                        else if current_track == index - 1 {
+                                            self.playlist.current_track = Some(index);
+                                        }
                                     }
                                 }
                             },
                             MultiplayerTrackMessage::MoveTrackDown => {
                                 if index != self.playlist.tracks.len() - 1 {
                                     self.playlist.swap_tracks(index, index + 1);
-                                    match self.playlist.current_track {
-                                        Some(current_track)  => {
-                                            if current_track == index {
-                                                self.playlist.current_track = Some(index + 1);
-                                            }
-                                            else if current_track == index + 1 {
-                                                self.playlist.current_track = Some(index);
-                                            }
-                                        },
-                                        _ => {}
+                                    if let Some(current_track) = self.playlist.current_track {
+                                        if current_track == index {
+                                            self.playlist.current_track = Some(index + 1);
+                                        }
+                                        else if current_track == index + 1 {
+                                            self.playlist.current_track = Some(index);
+                                        }
                                     }
                                 }
                             },
@@ -471,17 +460,12 @@ impl Multiplayer {
             Message::Resume => {
                 if self.currently_playing_static_sound_handle.is_some() {
                     let handle = self.currently_playing_static_sound_handle.as_mut().unwrap();
-                    match handle.state() {
-                        PlaybackState::Paused => {
-                            handle.resume(Tween {
-                                start_time: StartTime::Immediate,
-                                duration: Duration::from_millis(self.fade_in_duration),
-                                easing: Easing::Linear,
-                            })
-                        }
-                        _ => {
-                            ()
-                        }
+                    if handle.state() == PlaybackState::Paused {
+                        handle.resume(Tween {
+                            start_time: StartTime::Immediate,
+                            duration: Duration::from_millis(self.fade_in_duration),
+                            easing: Easing::Linear,
+                        })
                     }
                 }
 
@@ -641,12 +625,12 @@ async fn open_playlist() -> Result<Vec<MultiplayerTrack>, Error> {
 async fn parse_playlist(file_handle: FileHandle) -> Result<Vec<MultiplayerTrack>, Error> {
     let playlist_json = std::fs::read_to_string(file_handle.path().to_str().unwrap()).unwrap();
     let playlist: Playlist = serde_json::from_str(&playlist_json).unwrap();
-    let result = playlist.tracks.iter()
+    
+    playlist.tracks.iter()
         .map(|track| {
             MultiplayerTrack::from(track)
         })
-        .collect::<Result<Vec<MultiplayerTrack>, Error>>();
-    result
+        .collect::<Result<Vec<MultiplayerTrack>, Error>>()
 }
 
 async fn save_playlist() -> Result<FileHandle, Error> {

@@ -1,5 +1,5 @@
 use iced::{Font, Theme};
-use multiplayer::multiplayer::Multiplayer;
+use multiplayer_host::multiplayer::Multiplayer;
 
 fn main() -> iced::Result {
     iced::application("Multiplayer", Multiplayer::update, Multiplayer::view)
