@@ -13,8 +13,13 @@ use std::collections::VecDeque;
 use std::net::UdpSocket;
 use std::time::Duration;
 use std::{error, io, thread};
+use bincode::config::Configuration;
+use message_io::network::{Endpoint, NetEvent, SendStatus, Transport};
+use message_io::node;
+use message_io::node::{NodeEvent, NodeHandler, NodeListener};
 use opus::Bitrate;
 use opus::ErrorCode as OpusErrorCode;
+use serde::{Deserialize, Serialize};
 use sysinfo::{get_current_pid, Pid};
 use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
 
@@ -39,6 +44,24 @@ pub enum Message {
     Pause,
     Resume,
     Stop,
+}
+
+#[derive(Clone, Debug)]
+enum Signal {
+    SendChunk(Endpoint),
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum ClientMessage {
+    //From sender to receiver
+    AudioRequest,
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum HostMessage {
+    //From receiver to sender
+    CanStream(bool),
+    Chunk(Vec<u8>),
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -82,21 +105,66 @@ impl Default for Multiplayer {
             .spawn(move || {
                 let result = capture_loop(tx_capt, CAPTURE_CHUNK_SIZE, process_id);
                 if let Err(_err) = result {
+                    println!("Capture thread exited with error: {}", _err);
                 }
             });
 
         let udp_socket = UdpSocket::bind("192.168.0.31:9475").unwrap();
+        let (handler, listener): (NodeHandler<Signal>, NodeListener<Signal>) = node::split();
+        let (resource_id, socket_addr) = handler.network().listen(Transport::FramedTcp, "127.0.0.1:9475").unwrap();
 
         thread::spawn(move || {
-            loop {
-                match rx_capt.recv() {
-                    Ok(chunk) => {
-                            if let Ok(_length) = udp_socket.send_to(&chunk, "192.168.0.45:9476") {
+            println!("Listening on {}", socket_addr);
+            let mut clients: Vec<Endpoint> = Vec::new();
+            listener.for_each(move |event| match event {
+                NodeEvent::Network(net_event) => match net_event {
+                    NetEvent::Connected(endpoint, established) => {}
+                    NetEvent::Accepted(_, _) => {}
+                    NetEvent::Message(endpoint, input_data) => {
+                        let message: (ClientMessage, usize) = match bincode::serde::decode_from_slice::<ClientMessage, Configuration>(input_data, Configuration::default()) {
+                            Ok(message) => message,
+                            Err(err) => {
+                                println!("Error decoding message: {}", err);
+                                return;
+                            }
+                        };
+                        match message.0 {
+                            ClientMessage::AudioRequest => {
+                                println!("Audio request received from {}", endpoint);
+                                let output_data = bincode::serde::encode_to_vec::<HostMessage, Configuration>(HostMessage::CanStream(true), Configuration::default()).unwrap();
+                                let send_status = handler.network().send(endpoint, &output_data);
+                                match send_status {
+                                    SendStatus::Sent => {
+                                        handler.signals().send(Signal::SendChunk(endpoint));
+                                    }
+                                    SendStatus::MaxPacketSizeExceeded => {}
+                                    SendStatus::ResourceNotFound => {}
+                                    SendStatus::ResourceNotAvailable => {}
+                                }
+                            },
+
+                        }
+                    }
+                    NetEvent::Disconnected(_) => {}
+                }
+                NodeEvent::Signal(signal) => match signal {
+                    Signal::SendChunk(client_id) => {
+                        match rx_capt.recv() {
+                            Ok(data) => {
+                                println!("Sending chunk to {}", client_id);
+                                let chunk = HostMessage::Chunk(data);
+                                let output_data = bincode::serde::encode_to_vec::<HostMessage, Configuration>(chunk, Configuration::default()).unwrap();
+                                handler.network().send(client_id, output_data.as_slice());
+                                handler.signals().send_with_timer(Signal::SendChunk(client_id), Duration::from_micros(10));
+                            }
+
+                            Err(error) => {
+                                println!("Error receiving chunk from capture: {}", error);
                             }
                         }
-                    Err(_err) => {}
+                    }
                 }
-            }
+            })
         });
 
         let mut audio_manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default()).unwrap();
