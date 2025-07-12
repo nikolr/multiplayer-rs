@@ -200,8 +200,8 @@ impl Multiplayer {
                                                     }
                                                 },
                                                 HostMessage::Chunk(chunk) => {
-                                                    println!("Received chunk");
-                                                    println!("Chunk size: {}", chunk.len());
+                                                    // println!("Received chunk");
+                                                    // println!("Chunk size: {}", chunk.len());
                                                     match tx.send(chunk) {
                                                         Ok(_) => {
                                                             // println!("Sent chunk");
@@ -388,7 +388,7 @@ where
                 Err(error) => {
                     match error {
                         TryRecvError::Empty => {
-                            println!("Ok to keep looping")
+                            // println!("Ok to keep looping")
                         }
                         TryRecvError::Disconnected => {
                             println!("Here we should stop playback");

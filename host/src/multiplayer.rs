@@ -163,7 +163,7 @@ impl Default for Multiplayer {
                         if clients.iter().any(|client| client.endpoint == client_id) {
                             match rx_capt.recv() {
                                 Ok(data) => {
-                                    println!("Sending chunk to {}", client_id);
+                                    // println!("Sending chunk to {}", client_id);
                                     let chunk = HostMessage::Chunk(data);
                                     let output_data = bincode::serde::encode_to_vec::<HostMessage, Configuration>(chunk, Configuration::default()).unwrap();
                                     handler.network().send(client_id, output_data.as_slice());
