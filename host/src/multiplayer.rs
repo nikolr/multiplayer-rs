@@ -14,6 +14,7 @@ use std::net::UdpSocket;
 use std::time::Duration;
 use std::{error, io, thread};
 use bincode::config::Configuration;
+use message_io::events::TimerId;
 use message_io::network::{Endpoint, NetEvent, SendStatus, Transport};
 use message_io::node;
 use message_io::node::{NodeEvent, NodeHandler, NodeListener};
@@ -92,6 +93,10 @@ pub struct Multiplayer {
     audio_seek_dragged: bool,
 }
 
+struct Client {
+    endpoint: Endpoint,
+}
+
 impl Default for Multiplayer {
     fn default() -> Self {
         let process_id = get_current_pid().unwrap();
@@ -109,13 +114,13 @@ impl Default for Multiplayer {
                 }
             });
 
-        let udp_socket = UdpSocket::bind("192.168.0.31:9475").unwrap();
         let (handler, listener): (NodeHandler<Signal>, NodeListener<Signal>) = node::split();
-        let (resource_id, socket_addr) = handler.network().listen(Transport::FramedTcp, "127.0.0.1:9475").unwrap();
+        // let (resource_id, socket_addr) = handler.network().listen(Transport::FramedTcp, "127.0.0.1:9475").unwrap();
+        let (resource_id, socket_addr) = handler.network().listen(Transport::FramedTcp, "192.168.0.31:9475").unwrap();
 
         thread::spawn(move || {
             println!("Listening on {}", socket_addr);
-            let mut clients: Vec<Endpoint> = Vec::new();
+            let mut clients: Vec<Client> = Vec::new();
             listener.for_each(move |event| match event {
                 NodeEvent::Network(net_event) => match net_event {
                     NetEvent::Connected(endpoint, established) => {}
@@ -135,6 +140,7 @@ impl Default for Multiplayer {
                                 let send_status = handler.network().send(endpoint, &output_data);
                                 match send_status {
                                     SendStatus::Sent => {
+                                        clients.push(Client {endpoint});
                                         handler.signals().send(Signal::SendChunk(endpoint));
                                     }
                                     SendStatus::MaxPacketSizeExceeded => {}
@@ -145,21 +151,28 @@ impl Default for Multiplayer {
 
                         }
                     }
-                    NetEvent::Disconnected(_) => {}
+                    NetEvent::Disconnected(endpoint) => {
+                        println!("Client disconnected: {}", endpoint);
+                        if let Some(index) = clients.iter().position(|client| client.endpoint == endpoint) {
+                            clients.remove(index);
+                        }
+                    }
                 }
                 NodeEvent::Signal(signal) => match signal {
                     Signal::SendChunk(client_id) => {
-                        match rx_capt.recv() {
-                            Ok(data) => {
-                                println!("Sending chunk to {}", client_id);
-                                let chunk = HostMessage::Chunk(data);
-                                let output_data = bincode::serde::encode_to_vec::<HostMessage, Configuration>(chunk, Configuration::default()).unwrap();
-                                handler.network().send(client_id, output_data.as_slice());
-                                handler.signals().send_with_timer(Signal::SendChunk(client_id), Duration::from_micros(10));
-                            }
+                        if clients.iter().any(|client| client.endpoint == client_id) {
+                            match rx_capt.recv() {
+                                Ok(data) => {
+                                    println!("Sending chunk to {}", client_id);
+                                    let chunk = HostMessage::Chunk(data);
+                                    let output_data = bincode::serde::encode_to_vec::<HostMessage, Configuration>(chunk, Configuration::default()).unwrap();
+                                    handler.network().send(client_id, output_data.as_slice());
+                                    handler.signals().send_with_timer(Signal::SendChunk(client_id), Duration::from_micros(10));
+                                }
 
-                            Err(error) => {
-                                println!("Error receiving chunk from capture: {}", error);
+                                Err(error) => {
+                                    println!("Error receiving chunk from capture: {}", error);
+                                }
                             }
                         }
                     }
