@@ -1,5 +1,6 @@
 use crate::playlist::{Playlist, Track};
 use crate::track::{MultiplayerPlaylist, MultiplayerPlaylistMessage, MultiplayerTrack, MultiplayerTrackMessage};
+use bincode::config::Configuration;
 use iced::widget::{button, center, column, container, row, slider, text, tooltip, vertical_space, Container};
 use iced::{Alignment, Element, Fill, Font, Subscription, Task};
 use kira::modulator::tweener::{TweenerBuilder, TweenerHandle};
@@ -7,25 +8,24 @@ use kira::sound::static_sound::StaticSoundHandle;
 use kira::sound::{PlaybackPosition, PlaybackState};
 use kira::track::{TrackBuilder, TrackHandle};
 use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Easing, Mapping, StartTime, Tween, Value};
-use rfd::FileHandle;
-use std::cmp::PartialEq;
-use std::collections::VecDeque;
-use std::net::UdpSocket;
-use std::time::Duration;
-use std::{error, io, thread};
-use bincode::config::Configuration;
-use message_io::events::TimerId;
 use message_io::network::{Endpoint, NetEvent, SendStatus, Transport};
 use message_io::node;
 use message_io::node::{NodeEvent, NodeHandler, NodeListener};
 use opus::Bitrate;
 use opus::ErrorCode as OpusErrorCode;
+use rfd::FileHandle;
 use serde::{Deserialize, Serialize};
+use std::cmp::PartialEq;
+use std::collections::VecDeque;
+use std::time::Duration;
+use std::{error, io, thread};
 use sysinfo::{get_current_pid, Pid};
 use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
 
+const HOST_PORT: u16 = 9475;
 const CAPTURE_CHUNK_SIZE: usize = 480;
 const BIT_RATE: i32 = 64000;
+const CHANNELS: u16 = 2;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -116,7 +116,28 @@ impl Default for Multiplayer {
 
         let (handler, listener): (NodeHandler<Signal>, NodeListener<Signal>) = node::split();
         // let (resource_id, socket_addr) = handler.network().listen(Transport::FramedTcp, "127.0.0.1:9475").unwrap();
-        let (resource_id, socket_addr) = handler.network().listen(Transport::FramedTcp, "192.168.0.31:9475").unwrap();
+        let gateway_ip = match reqwest::blocking::get("https://api.ipify.org") {
+            Ok(response) => {
+                let ip = response.text().unwrap();
+                ip
+            },
+            Err(err) => {
+                println!("Error getting gateway IP: {}", err);
+                String::from("127.0.0.1")
+            }
+        };
+
+        let ip = match local_ip_address::local_ip() {
+            Ok(ip_addr) => {
+                ip_addr.to_string()
+            }
+            Err(error) => {
+                println!("Error getting local IP: {}", error);
+                String::from("127.0.0.1")
+            }
+        };
+
+        let (resource_id, socket_addr) = handler.network().listen(Transport::FramedTcp, format!("{ip}:{HOST_PORT}")).unwrap();
 
         thread::spawn(move || {
             println!("Listening on {}", socket_addr);
@@ -160,13 +181,18 @@ impl Default for Multiplayer {
                 }
                 NodeEvent::Signal(signal) => match signal {
                     Signal::SendChunk => {
+                        if clients.is_empty() {
+                            return;
+                        }
                         match rx_capt.recv() {
                             Ok(data) => {
-                                // println!("Sending chunk to {}", client_id);
-                                let chunk = HostMessage::Chunk(data);
-                                let output_data = bincode::serde::encode_to_vec::<HostMessage, Configuration>(chunk, Configuration::default()).unwrap();
-                                for client in clients.iter() {
-                                    handler.network().send(client.endpoint, output_data.as_slice());
+                                if data.len() > 3 {
+                                    println!("Sending chunk to {} clients", clients.len());
+                                    let chunk = HostMessage::Chunk(data);
+                                    let output_data = bincode::serde::encode_to_vec::<HostMessage, Configuration>(chunk, Configuration::default()).unwrap();
+                                    for client in clients.iter() {
+                                        handler.network().send(client.endpoint, output_data.as_slice());
+                                    }
                                 }
                                 handler.signals().send_with_timer(Signal::SendChunk, Duration::from_micros(10));
                             }

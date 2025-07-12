@@ -138,7 +138,7 @@ impl Multiplayer {
                             }
                         };
                         println!("{:?}", config);
-                        
+
                         let (tx, rx) = mpsc::channel();
                         let (tx_playback, rx_playback) = mpsc::channel();
 
@@ -217,7 +217,7 @@ impl Multiplayer {
                                         NetEvent::Disconnected(endpoint) => {
                                             println!("Disconnected from server by server disconnect: {}", endpoint);
                                             handler.stop();
-                                            match tx_playback.send(PlaybackMessage::Stop) { 
+                                            match tx_playback.send(PlaybackMessage::Stop) {
                                                 Ok(_) => {
                                                     println!("Sent stop message");
                                                 }
@@ -393,7 +393,7 @@ where
                         TryRecvError::Disconnected => {
                             println!("Here we should stop playback");
                             drop(stream);
-                            break;       
+                            break;
                         }
                     }
                 }

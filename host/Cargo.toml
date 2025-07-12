@@ -17,3 +17,5 @@ opus = "0.3.0"
 anyhow = "1.0.98"
 message-io = "0.19.0"
 bincode = { version = "2.0.1" , features = ["serde"]}
+reqwest = { version = "0.12.22", features = ["blocking"] }
+local-ip-address = "0.6.5"
