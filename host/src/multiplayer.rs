@@ -49,7 +49,7 @@ pub enum Message {
 
 #[derive(Clone, Debug)]
 enum Signal {
-    SendChunk(Endpoint),
+    SendChunk,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -141,7 +141,7 @@ impl Default for Multiplayer {
                                 match send_status {
                                     SendStatus::Sent => {
                                         clients.push(Client {endpoint});
-                                        handler.signals().send(Signal::SendChunk(endpoint));
+                                        handler.signals().send(Signal::SendChunk);
                                     }
                                     SendStatus::MaxPacketSizeExceeded => {}
                                     SendStatus::ResourceNotFound => {}
@@ -159,20 +159,20 @@ impl Default for Multiplayer {
                     }
                 }
                 NodeEvent::Signal(signal) => match signal {
-                    Signal::SendChunk(client_id) => {
-                        if clients.iter().any(|client| client.endpoint == client_id) {
-                            match rx_capt.recv() {
-                                Ok(data) => {
-                                    // println!("Sending chunk to {}", client_id);
-                                    let chunk = HostMessage::Chunk(data);
-                                    let output_data = bincode::serde::encode_to_vec::<HostMessage, Configuration>(chunk, Configuration::default()).unwrap();
-                                    handler.network().send(client_id, output_data.as_slice());
-                                    handler.signals().send_with_timer(Signal::SendChunk(client_id), Duration::from_micros(10));
+                    Signal::SendChunk => {
+                        match rx_capt.recv() {
+                            Ok(data) => {
+                                // println!("Sending chunk to {}", client_id);
+                                let chunk = HostMessage::Chunk(data);
+                                let output_data = bincode::serde::encode_to_vec::<HostMessage, Configuration>(chunk, Configuration::default()).unwrap();
+                                for client in clients.iter() {
+                                    handler.network().send(client.endpoint, output_data.as_slice());
                                 }
+                                handler.signals().send_with_timer(Signal::SendChunk, Duration::from_micros(10));
+                            }
 
-                                Err(error) => {
-                                    println!("Error receiving chunk from capture: {}", error);
-                                }
+                            Err(error) => {
+                                println!("Error receiving chunk from capture: {}", error);
                             }
                         }
                     }
