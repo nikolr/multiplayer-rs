@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::net::Ipv4Addr;
 use std::sync::mpsc;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::{io, thread};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -10,6 +10,7 @@ use cpal::{FromSample, Sample, SampleRate, SizedSample};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use iced::{Alignment, Element, Length, Task};
 use iced::alignment::{Horizontal, Vertical};
+use iced::futures::SinkExt;
 use iced::widget::{Button, Column, Container, Row, Text, TextInput};
 use message_io::network::{NetEvent, SendStatus, Transport};
 use message_io::node;
@@ -38,7 +39,6 @@ pub enum Message {
     ClearPressed,
     ConnectPressed,
     DisconnectPressed,
-    Disconnected(Result<(), Error>),
 }
 
 #[derive(Debug, Clone)]
@@ -105,7 +105,7 @@ impl Multiplayer {
                 Task::none()
             },
             Message::ConnectPressed => {
-                if self.join_handle.is_some() {
+                if self.handler.clone().is_some_and(|handler| handler.is_running()) {
                     return Task::none();
                 }
                 match self.server_address.parse::<Ipv4Addr>() {
@@ -140,25 +140,26 @@ impl Multiplayer {
                         println!("{:?}", config);
                         
                         let (tx, rx) = mpsc::channel();
+                        let (tx_playback, rx_playback) = mpsc::channel();
 
-                        let (decoder_join_handle, playback_join_handle) = match config.sample_format() {
-                            cpal::SampleFormat::F32 => run::<f32>(device, config.into(), rx).unwrap(),
-                            cpal::SampleFormat::I16 => run::<i16>(device, config.into(), rx).unwrap(),
-                            cpal::SampleFormat::U16 => run::<u16>(device, config.into(), rx).unwrap(),
+                        let (mut decoder_join_handle, mut playback_join_handle) = match config.sample_format() {
+                            cpal::SampleFormat::F32 => run::<f32>(device, config.into(), rx, rx_playback).unwrap(),
+                            cpal::SampleFormat::I16 => run::<i16>(device, config.into(), rx, rx_playback).unwrap(),
+                            cpal::SampleFormat::U16 => run::<u16>(device, config.into(), rx, rx_playback).unwrap(),
                             _ => panic!("Unsupported format"),
                         };
 
-                        self.decoder_join_handle = Some(decoder_join_handle);
-                        self.playback_join_handle = Some(playback_join_handle);
+                        // self.decoder_join_handle = Some(decoder_join_handle);
+                        // self.playback_join_handle = Some(playback_join_handle);
 
                         
                         println!("I think this is the host address:");
                         println!("{address}:{SERVER_PORT}");
                         if let Ok((server_id, socket_addr)) = handler.network().connect(Transport::FramedTcp, format!("{address}:{SERVER_PORT}")) {
                             let username = self.username.clone();
-                            if self.join_handle.is_some() {
-                                return Task::none();
-                            }
+                            // if self.join_handle.is_some() {
+                            //     self.join_handle.take().unwrap().join().unwrap();
+                            // }
                             self.join_handle = Some(thread::spawn(move || {
                                 listener.for_each(move |event| match event.network() {
                                         NetEvent::Connected(endpoint, established) => {
@@ -201,7 +202,14 @@ impl Multiplayer {
                                                 HostMessage::Chunk(chunk) => {
                                                     println!("Received chunk");
                                                     println!("Chunk size: {}", chunk.len());
-                                                    tx.send(chunk).unwrap();
+                                                    match tx.send(chunk) {
+                                                        Ok(_) => {
+                                                            // println!("Sent chunk");
+                                                        }
+                                                        Err(_) => {
+                                                            // println!("Error sending chunk");
+                                                        }
+                                                    }
                                                 }
                                                 
                                             }
@@ -209,6 +217,16 @@ impl Multiplayer {
                                         NetEvent::Disconnected(endpoint) => {
                                             println!("Disconnected from server by server disconnect: {}", endpoint);
                                             handler.stop();
+                                            match tx_playback.send(PlaybackMessage::Stop) { 
+                                                Ok(_) => {
+                                                    println!("Sent stop message");
+                                                }
+                                                Err(_) => {
+                                                    println!("Error sending stop message");
+                                                }
+                                            }
+                                            decoder_join_handle.take().unwrap().join().unwrap();
+                                            playback_join_handle.take().unwrap().join().unwrap();
                                         }
                                 });
                             }));
@@ -219,6 +237,7 @@ impl Multiplayer {
                     },
                 }
 
+                println!("About to launch Task");
                 Task::none()
 
             },
@@ -248,10 +267,6 @@ impl Multiplayer {
                     }
                 }
                 
-                Task::none()
-            },
-            Message::Disconnected(_) => {
-                println!("Disconnected using message");
                 Task::none()
             },
         }
@@ -303,7 +318,7 @@ impl Multiplayer {
     }
 }
 
-fn run<T>(device: cpal::Device, config: cpal::StreamConfig, rx_chunk: Receiver<Vec<u8>>) -> Result<(JoinHandle<()>, JoinHandle<()>), anyhow::Error>
+fn run<T>(device: cpal::Device, config: cpal::StreamConfig, rx_chunk: Receiver<Vec<u8>>, rx_playback: Receiver<PlaybackMessage>) -> Result<(Option<JoinHandle<()>>, Option<JoinHandle<()>>), anyhow::Error>
 where
     T: SizedSample + FromSample<f32>,
 {
@@ -317,19 +332,34 @@ where
     let mut opus_decoder_buffer = [0f32; 960];
     let decoder_join_handle = thread::spawn(move || {
         loop {
-            if let Ok(chunk) = rx_chunk.recv() {
-                match opus_decoder.decode_float(chunk.as_slice(), opus_decoder_buffer.as_mut_slice(), false) {
-                    Ok(result) => {
-                        for i in 0..(result * channels) {
-                            sample_deque.push_back(opus_decoder_buffer[i]);
+            match rx_chunk.recv() {
+                Ok(chunk) => {
+                    match opus_decoder.decode_float(chunk.as_slice(), opus_decoder_buffer.as_mut_slice(), false) {
+                        Ok(result) => {
+                            for i in 0..(result * channels) {
+                                sample_deque.push_back(opus_decoder_buffer[i]);
+                            }
+                            while let Some(value) = sample_deque.pop_front() {
+                                if let Err(e) = tx.send(value) {
+                                    match e {
+                                        std::sync::mpsc::SendError(value) => {
+                                            println!("Error sending value: {}", value);
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        Err(e) => println!("error: {}", e)
+                    };
+                }
+                Err(error) => {
+                    match error {
+                        RecvError => {
+                            println!("Disconnected from server in decoder loop. Breaking out of loop");
+                            break;
                         }
-                        while let Some(value) = sample_deque.pop_front() {
-                            tx.send(value).unwrap();
-                        }
-                    },
-
-                    Err(e) => println!("error: {}", e)
-                };
+                    }
+                }
             }
         }
     });
@@ -349,9 +379,29 @@ where
         stream.play().unwrap();
         loop {
             thread::sleep(Duration::from_millis(1));
+            match rx_playback.try_recv() {
+                Ok(PlaybackMessage::Stop) => {
+                    println!("Playback stopped");
+                    drop(stream);
+                    break;
+                }
+                Err(error) => {
+                    match error {
+                        TryRecvError::Empty => {
+                            println!("Ok to keep looping")
+                        }
+                        TryRecvError::Disconnected => {
+                            println!("Here we should stop playback");
+                            drop(stream);
+                            break;       
+                        }
+                    }
+                }
+
+            }
         }
     });
-    Ok((decoder_join_handle, playback_join_handle))
+    Ok((Some(decoder_join_handle), Some(playback_join_handle)))
 }
 
 fn write_data<T>(output: &mut [T], next_sample: &mut dyn FnMut() -> f32)
@@ -363,7 +413,7 @@ where
     }
 }
 
-async fn disconnect() -> Result<(), Error> {
-    println!("Disconnecting");
-    Ok(())
+#[derive(Debug, Clone)]
+enum PlaybackMessage {
+    Stop,
 }
