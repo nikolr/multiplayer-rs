@@ -1,7 +1,7 @@
 use crate::playlist::{Playlist, Track};
 use crate::track::{MultiplayerPlaylist, MultiplayerPlaylistMessage, MultiplayerTrack, MultiplayerTrackMessage};
 use bincode::config::Configuration;
-use iced::widget::{button, center, column, container, row, slider, text, tooltip, vertical_space, Container};
+use iced::widget::{button, center, column, container, row, slider, text, tooltip, vertical_space, Column, Container, Text};
 use iced::{Alignment, Element, Fill, Font, Subscription, Task};
 use kira::modulator::tweener::{TweenerBuilder, TweenerHandle};
 use kira::sound::static_sound::StaticSoundHandle;
@@ -19,6 +19,7 @@ use std::cmp::PartialEq;
 use std::collections::VecDeque;
 use std::time::Duration;
 use std::{error, io, thread};
+use std::sync::{Arc, Mutex};
 use sysinfo::{get_current_pid, Pid};
 use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
 
@@ -91,10 +92,19 @@ pub struct Multiplayer {
     fade_in_duration: u64,
     fade_out_duration: u64,
     audio_seek_dragged: bool,
+    connected_clients: Arc<Mutex<Vec<Client>>>,
 }
 
+#[derive(Clone, Debug)]
 struct Client {
     endpoint: Endpoint,
+}
+
+impl Client {
+    fn view(&self) -> Element<Message> {
+        Text::new(format!("{}", &self.endpoint))
+            .into()
+    }
 }
 
 impl Default for Multiplayer {
@@ -139,9 +149,11 @@ impl Default for Multiplayer {
 
         let (resource_id, socket_addr) = handler.network().listen(Transport::FramedTcp, format!("{ip}:{HOST_PORT}")).unwrap();
 
+        let connected_clients = Arc::new(Mutex::new(Vec::new()));
+        let connected_clients_clone = Arc::clone(&connected_clients);
+        
         thread::spawn(move || {
             println!("Listening on {}", socket_addr);
-            let mut clients: Vec<Client> = Vec::new();
             listener.for_each(move |event| match event {
                 NodeEvent::Network(net_event) => match net_event {
                     NetEvent::Connected(endpoint, established) => {}
@@ -161,7 +173,8 @@ impl Default for Multiplayer {
                                 let send_status = handler.network().send(endpoint, &output_data);
                                 match send_status {
                                     SendStatus::Sent => {
-                                        clients.push(Client {endpoint});
+                                        let clients = Arc::clone(&connected_clients_clone);
+                                        clients.lock().unwrap().push(Client {endpoint});
                                         handler.signals().send(Signal::SendChunk);
                                     }
                                     SendStatus::MaxPacketSizeExceeded => {}
@@ -174,6 +187,8 @@ impl Default for Multiplayer {
                     }
                     NetEvent::Disconnected(endpoint) => {
                         println!("Client disconnected: {}", endpoint);
+                        let connected = Arc::clone(&connected_clients_clone);
+                        let mut clients = connected.lock().unwrap();
                         if let Some(index) = clients.iter().position(|client| client.endpoint == endpoint) {
                             clients.remove(index);
                         }
@@ -181,12 +196,11 @@ impl Default for Multiplayer {
                 }
                 NodeEvent::Signal(signal) => match signal {
                     Signal::SendChunk => {
-                        if clients.is_empty() {
-                            return;
-                        }
                         match rx_capt.recv() {
                             Ok(data) => {
                                 if data.len() > 3 {
+                                    let connected = Arc::clone(&connected_clients_clone);
+                                    let clients = connected.lock().unwrap();
                                     println!("Sending chunk to {} clients", clients.len());
                                     let chunk = HostMessage::Chunk(data);
                                     let output_data = bincode::serde::encode_to_vec::<HostMessage, Configuration>(chunk, Configuration::default()).unwrap();
@@ -250,6 +264,7 @@ impl Default for Multiplayer {
             fade_in_duration: 600,
             fade_out_duration: 600,
             audio_seek_dragged: false,
+            connected_clients: connected_clients,
         }
     }
 }
@@ -580,6 +595,11 @@ impl Multiplayer {
             }
 
             Message::Stop => {
+                let clients = self.connected_clients.lock().unwrap();
+                println!("Clients: {}", clients.len());
+                for client in clients.iter() {
+                    println!("Client: {}", client.endpoint)
+                }
                 if self.currently_playing_static_sound_handle.is_some() {
                     self.currently_playing_static_sound_handle.as_mut().unwrap().stop(Tween {
                         start_time: StartTime::Immediate,
@@ -691,6 +711,15 @@ impl Multiplayer {
             .height(36)
             .padding(8)
             .spacing(8);
+        
+       // TODO Make a scroll container for client usernames here 
+        let connected_clients = Arc::clone(&self.connected_clients);
+        let clients = connected_clients.lock().unwrap();
+        let client_views = clients.iter().map(|client| {
+            Text::new(format!("{}", client.endpoint))
+                .into()
+        }).collect::<Vec<Element<Message>>>();
+        let client_container = Column::from_vec(client_views);
 
         column![
             controls,
@@ -698,6 +727,7 @@ impl Multiplayer {
             vertical_space(),
             seeker_slider,
             container(playback_controls).center_x(Fill),
+            client_container,
         ]
             .into()
     }

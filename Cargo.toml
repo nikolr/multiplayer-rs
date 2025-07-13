@@ -11,5 +11,8 @@ codegen-units = 1
 panic = "abort"
 strip = "debuginfo"
 
+[profile.release."*"]
+opt-level = 3
+
 [build]
 rustflags = ["-C", "target-cpu=native"]
