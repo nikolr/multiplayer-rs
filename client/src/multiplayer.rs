@@ -1,22 +1,21 @@
+use bincode::config::Configuration;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::{FromSample, Sample, SampleRate, SizedSample};
+use iced::alignment::{Horizontal, Vertical};
+use iced::widget::{column, container, Button, Column, Container, Row, Text, TextInput};
+use iced::{Alignment, Element, Length, Task};
+use message_io::network::{NetEvent, SendStatus, Transport};
+use message_io::node;
+use message_io::node::{NodeHandler, NodeListener};
+use opus::Channels::Stereo;
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::net::Ipv4Addr;
 use std::sync::mpsc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
-use std::{io, thread};
 use std::thread::JoinHandle;
 use std::time::Duration;
-use bincode::config::Configuration;
-use cpal::{FromSample, Sample, SampleRate, SizedSample};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use iced::{Alignment, Element, Length, Task};
-use iced::alignment::{Horizontal, Vertical};
-use iced::futures::SinkExt;
-use iced::widget::{Button, Column, Container, Row, Text, TextInput};
-use message_io::network::{NetEvent, SendStatus, Transport};
-use message_io::node;
-use message_io::node::{NodeEvent, NodeHandler, NodeListener};
-use opus::Channels::Stereo;
-use serde::{Deserialize, Serialize};
+use std::thread;
 
 const SERVER_PORT: u16 = 9475;
 
@@ -53,7 +52,7 @@ enum NodeMessage {
 #[derive(Serialize, Deserialize)]
 pub enum ClientMessage {
     //From sender to receiver
-    AudioRequest,
+    AudioRequest(String),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -89,6 +88,10 @@ impl Default for Multiplayer {
 }
 
 impl Multiplayer {
+    
+    fn is_connected(&self) -> bool {
+        self.handler.clone().is_some_and(|handler| handler.is_running())
+    }
     pub fn update(&mut self, message: Message) -> Task<Message>{
         match message {
             Message::UsernameChanged(username) => {
@@ -165,7 +168,7 @@ impl Multiplayer {
                                         NetEvent::Connected(endpoint, established) => {
                                             println!("Connected to server: {}", endpoint);
                                             if established {
-                                                let audio_request = ClientMessage::AudioRequest;
+                                                let audio_request = ClientMessage::AudioRequest(username.clone());
                                                 let data = bincode::serde::encode_to_vec::<ClientMessage, Configuration>(audio_request, Configuration::default()).unwrap();
                                                 let send_status = handler.network().send(server_id, data.as_slice());
                                                 match send_status {
@@ -273,48 +276,62 @@ impl Multiplayer {
     }
 
     pub fn view(&self) -> Element<Message> {
-        let content: Element<Message> = Container::new(
-            Column::new()
-                .align_x(Alignment::Center)
-                .max_width(600)
-                .padding(20)
-                .spacing(16)
-                .push(
-                    TextInput::new("Username", &self.username)
-                        .on_input(Message::UsernameChanged)
-                        .padding(10)
-                        .size(32),
+        match self.is_connected() {
+            true => {
+                container(
+                    column![
+                        Container::new(Text::new("Connected").center().align_x(Horizontal::Center)),
+                        Button::new(Text::new("Disconnect").center().align_x(Horizontal::Center))
+                            .on_press(Message::DisconnectPressed),
+                    ]
                 )
-                .push(
-                    TextInput::new("Server IP", &self.server_address)
-                        .on_input(Message::ServerAddressChanged)
-                        .padding(10)
-                        .size(32)
-                )
-                .push(
-                    Row::new()
-                        .spacing(10)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(Horizontal::Center)
+                    .align_y(Vertical::Center)
+                    .into()
+            }
+            false => {
+                let content: Element<Message> = Container::new(
+                    Column::new()
+                        .align_x(Alignment::Center)
+                        .max_width(600)
+                        .padding(20)
+                        .spacing(16)
                         .push(
-                            Button::new(Text::new("Clear").align_x(Horizontal::Center))
-                                .width(Length::Fill)
-                                .on_press(Message::ClearPressed),
+                            TextInput::new("Username", &self.username)
+                                .on_input(Message::UsernameChanged)
+                                .padding(10)
+                                .size(32),
                         )
                         .push(
-                            Button::new(Text::new("Connect").align_x(Horizontal::Center))
-                                .width(Length::Fill)
-                                .on_press(Message::ConnectPressed),
+                            TextInput::new("Server IP", &self.server_address)
+                                .on_input(Message::ServerAddressChanged)
+                                .padding(10)
+                                .size(32)
                         )
                         .push(
-                            Button::new(Text::new("Disconnect").align_x(Horizontal::Center))
-                                .width(Length::Fill)
-                                .on_press(Message::DisconnectPressed),
+                            Row::new()
+                                .spacing(10)
+                                .push(
+                                    Button::new(Text::new("Clear").align_x(Horizontal::Center))
+                                        .width(Length::Fill)
+                                        .on_press(Message::ClearPressed),
+                                )
+                                .push(
+                                    Button::new(Text::new("Connect").align_x(Horizontal::Center))
+                                        .width(Length::Fill)
+                                        .on_press(Message::ConnectPressed),
+                                )
                         ),
-                ),
-        )
-            .align_x(Horizontal::Center)
-            .align_y(Vertical::Center)
-            .into();
-        content
+                )
+                    .align_x(Horizontal::Center)
+                    .align_y(Vertical::Center)
+                    .into();
+                content
+            }
+        }
+
     }
 }
 

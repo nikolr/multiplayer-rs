@@ -55,8 +55,7 @@ enum Signal {
 
 #[derive(Serialize, Deserialize)]
 pub enum ClientMessage {
-    //From sender to receiver
-    AudioRequest,
+    AudioRequest(String),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -98,6 +97,7 @@ pub struct Multiplayer {
 #[derive(Clone, Debug)]
 struct Client {
     endpoint: Endpoint,
+    username: String,
 }
 
 impl Client {
@@ -167,14 +167,14 @@ impl Default for Multiplayer {
                             }
                         };
                         match message.0 {
-                            ClientMessage::AudioRequest => {
+                            ClientMessage::AudioRequest(username) => {
                                 println!("Audio request received from {}", endpoint);
                                 let output_data = bincode::serde::encode_to_vec::<HostMessage, Configuration>(HostMessage::CanStream(true), Configuration::default()).unwrap();
                                 let send_status = handler.network().send(endpoint, &output_data);
                                 match send_status {
                                     SendStatus::Sent => {
                                         let clients = Arc::clone(&connected_clients_clone);
-                                        clients.lock().unwrap().push(Client {endpoint});
+                                        clients.lock().unwrap().push(Client {endpoint, username});
                                         handler.signals().send(Signal::SendChunk);
                                     }
                                     SendStatus::MaxPacketSizeExceeded => {}
@@ -716,7 +716,7 @@ impl Multiplayer {
         let connected_clients = Arc::clone(&self.connected_clients);
         let clients = connected_clients.lock().unwrap();
         let client_views = clients.iter().map(|client| {
-            Text::new(format!("{}", client.endpoint))
+            Text::new(format!("{}", client.username))
                 .into()
         }).collect::<Vec<Element<Message>>>();
         let client_container = Column::from_vec(client_views);
