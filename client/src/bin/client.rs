@@ -1,4 +1,4 @@
-#![windows_subsystem = "windows"]
+// #![windows_subsystem = "windows"]
 
 use iced::{Font, Theme};
 use multiplayer_client::multiplayer::Multiplayer;

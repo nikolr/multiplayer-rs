@@ -154,6 +154,7 @@ impl Default for Multiplayer {
         
         thread::spawn(move || {
             println!("Listening on {}", socket_addr);
+            let mut connected_clients: Vec<Endpoint> = Vec::new();
             listener.for_each(move |event| match event {
                 NodeEvent::Network(net_event) => match net_event {
                     NetEvent::Connected(endpoint, established) => {}
@@ -169,6 +170,7 @@ impl Default for Multiplayer {
                         match message.0 {
                             ClientMessage::AudioRequest(username) => {
                                 println!("Audio request received from {}", endpoint);
+                                connected_clients.push(endpoint);
                                 let output_data = bincode::serde::encode_to_vec::<HostMessage, Configuration>(HostMessage::CanStream(true), Configuration::default()).unwrap();
                                 let send_status = handler.network().send(endpoint, &output_data);
                                 match send_status {
@@ -187,6 +189,7 @@ impl Default for Multiplayer {
                     }
                     NetEvent::Disconnected(endpoint) => {
                         println!("Client disconnected: {}", endpoint);
+                        connected_clients.retain(|client| client != &endpoint);
                         let connected = Arc::clone(&connected_clients_clone);
                         let mut clients = connected.lock().unwrap();
                         if let Some(index) = clients.iter().position(|client| client.endpoint == endpoint) {
@@ -199,13 +202,11 @@ impl Default for Multiplayer {
                         match rx_capt.recv() {
                             Ok(data) => {
                                 if data.len() > 3 {
-                                    let connected = Arc::clone(&connected_clients_clone);
-                                    let clients = connected.lock().unwrap();
-                                    println!("Sending chunk to {} clients", clients.len());
+                                    println!("Sending chunk to {} clients", connected_clients.len());
                                     let chunk = HostMessage::Chunk(data);
                                     let output_data = bincode::serde::encode_to_vec::<HostMessage, Configuration>(chunk, Configuration::default()).unwrap();
-                                    for client in clients.iter() {
-                                        handler.network().send(client.endpoint, output_data.as_slice());
+                                    for client in connected_clients.iter() {
+                                        handler.network().send(*client, output_data.as_slice());
                                     }
                                 }
                                 handler.signals().send_with_timer(Signal::SendChunk, Duration::from_micros(10));

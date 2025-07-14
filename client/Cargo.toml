@@ -16,8 +16,7 @@ strip = "debuginfo"
 opt-level = 3
 
 [dependencies]
-anyhow = "1.0.98"
-cpal = "0.16.0"
+rodio = "0.21.0"
 opus = "0.3.0"
 iced = "0.13.1"
 message-io = "0.19.0"
