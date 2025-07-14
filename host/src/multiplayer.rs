@@ -1,8 +1,8 @@
 use crate::playlist::{Playlist, Track};
 use crate::track::{MultiplayerPlaylist, MultiplayerPlaylistMessage, MultiplayerTrack, MultiplayerTrackMessage};
 use bincode::config::Configuration;
-use iced::widget::{button, center, column, container, row, slider, text, tooltip, vertical_space, Column, Container, Text};
-use iced::{Alignment, Element, Fill, Font, Subscription, Task};
+use iced::widget::{button, center, column, container, horizontal_space, row, slider, text, tooltip, vertical_space, Column, Container, Scrollable, Text};
+use iced::{Alignment, Element, Fill, FillPortion, Font, Length, Subscription, Task, Theme};
 use kira::modulator::tweener::{TweenerBuilder, TweenerHandle};
 use kira::sound::static_sound::StaticSoundHandle;
 use kira::sound::{PlaybackPosition, PlaybackState};
@@ -20,6 +20,8 @@ use std::collections::VecDeque;
 use std::time::Duration;
 use std::{error, io, thread};
 use std::sync::{Arc, Mutex};
+use iced::advanced::text::Wrapping;
+use iced::alignment::Horizontal;
 use sysinfo::{get_current_pid, Pid};
 use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
 
@@ -626,8 +628,8 @@ impl Multiplayer {
                     Message::UpdateFadeInDurationSlider,
                 )
                     .height(8)
-                    .width(Fill),
-                text(format!("{} ms", self.fade_in_duration)).width(Fill),
+                    .width(FillPortion(4)),
+                text(format!("{} ms", self.fade_in_duration)).width(FillPortion(1)),
             ]
                 .spacing(4)
         )
@@ -641,14 +643,27 @@ impl Multiplayer {
                     Message::UpdateFadeOutDurationSlider,
                 )
                     .height(8)
-                    .width(Fill),
-                text(format!("{} ms", self.fade_out_duration)).width(Fill),
+                    .width(FillPortion(4)),
+                text(format!("{} ms", self.fade_out_duration)).width(FillPortion(1)),
             ]
                 .spacing(4)
         )
             .center_x(Fill)
             .padding([6, 40]);
 
+        let connected_clients = Arc::clone(&self.connected_clients);
+        let clients = connected_clients.lock().unwrap();
+        let client_views = clients.iter().map(|client| {
+            Text::new(format!("{}", client.username))
+                .wrapping(Wrapping::None)
+                .size(18)
+                .into()
+        }).collect::<Vec<Element<Message>>>();
+        let client_container = Scrollable::new(
+            Column::from_vec(client_views)
+        )
+            .spacing(2);
+        
         let controls = row![
             action(
                 open_file_icon(),
@@ -669,11 +684,16 @@ impl Multiplayer {
                 fade_in_slider.align_y(Alignment::Start),
                 vertical_space(),
                 fade_out_slider.align_y(Alignment::End),
-            ]
+            ].width(FillPortion(6)),
+            text("Connected clients:")
+                .wrapping(Wrapping::None)
+                .align_x(Horizontal::Left)
+                .width(FillPortion(2)),
+            client_container.width(FillPortion(3)),
         ]
             .height(84)
             .padding(8)
-            .spacing(8);
+            .spacing(4);
 
         let total_duration = match self.playlist.get_current_track() {
             Some(track) => track.data.duration(),
@@ -712,15 +732,7 @@ impl Multiplayer {
             .height(36)
             .padding(8)
             .spacing(8);
-        
-       // TODO Make a scroll container for client usernames here 
-        let connected_clients = Arc::clone(&self.connected_clients);
-        let clients = connected_clients.lock().unwrap();
-        let client_views = clients.iter().map(|client| {
-            Text::new(format!("{}", client.username))
-                .into()
-        }).collect::<Vec<Element<Message>>>();
-        let client_container = Column::from_vec(client_views);
+
 
         column![
             controls,
@@ -728,7 +740,6 @@ impl Multiplayer {
             vertical_space(),
             seeker_slider,
             container(playback_controls).center_x(Fill),
-            client_container,
         ]
             .into()
     }

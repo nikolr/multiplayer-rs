@@ -4,7 +4,7 @@ use iced::widget::{column, container, Button, Column, Container, Row, Text, Text
 use iced::{Alignment, Element, Length, Task};
 use message_io::network::{NetEvent, SendStatus, Transport};
 use message_io::node;
-use message_io::node::NodeHandler;
+use message_io::node::{NodeHandler, NodeListener};
 use opus::Channels::Stereo;
 use rodio::buffer::SamplesBuffer;
 use serde::{Deserialize, Serialize};
@@ -51,10 +51,6 @@ impl Default for Multiplayer {
 }
 
 impl Multiplayer {
-    
-    fn is_connected(&self) -> bool {
-        self.handler.clone().is_some_and(|handler| handler.is_running())
-    }
     pub fn update(&mut self, message: Message) -> Task<Message>{
         match message {
             Message::UsernameChanged(username) => {
@@ -71,25 +67,29 @@ impl Multiplayer {
                 Task::none()
             },
             Message::ConnectPressed => {
-                if self.is_connected() {
+                if self.handler.clone().is_some_and(|handler| handler.is_running()) {
                     return Task::none();
                 }
                 match self.server_address.parse::<Ipv4Addr>() {
                     Ok(address) => {
+                        let (handler, listener): (NodeHandler<()>, NodeListener<()>) = node::split();
+                        self.handler = Some(handler.clone());
                         
-                        let (handler, listener) = node::split();
                         if let Ok((server_id, socket_addr)) = handler.network().connect(Transport::FramedTcp, format!("{address}:{SERVER_PORT}")) {
-                            self.handler = Some(handler.clone());
-                            
+                            if socket_addr.ip() == Ipv4Addr::new(0, 0, 0, 0) {
+                                println!("Connection failed");
+                                handler.stop();
+                                return Task::none();
+                            }
                             let username = self.username.clone();
                             let mut opus_decoder = opus::Decoder::new(48000, Stereo).unwrap();
                             let mut opus_decoder_buffer = [0f32; 960];
-                            
+
                             thread::spawn(move || {
                                 let stream_handle = rodio::OutputStreamBuilder::open_default_stream()
                                     .expect("open default audio stream");
                                 let sink = rodio::Sink::connect_new(&stream_handle.mixer());
-                                
+
                                 listener.for_each(move |event| match event.network() {
                                         NetEvent::Connected(endpoint, established) => {
                                             println!("Connected to server: {}", endpoint);
@@ -130,14 +130,13 @@ impl Multiplayer {
                                                 },
                                                 HostMessage::Chunk(chunk) => {
                                                     match opus_decoder.decode_float(chunk.as_slice(), opus_decoder_buffer.as_mut_slice(), false) {
-                                                        Ok(result) => {
+                                                        Ok(_result) => {
                                                             let samples_buffer = SamplesBuffer::new(2, 48000, opus_decoder_buffer);
                                                             sink.append(samples_buffer);
                                                         }
                                                         Err(e) => println!("error: {}", e)
                                                     }
                                                 }
-                                                
                                             }
                                         },
                                         NetEvent::Disconnected(endpoint) => {
@@ -167,7 +166,7 @@ impl Multiplayer {
     }
 
     pub fn view(&self) -> Element<Message> {
-        match self.is_connected() {
+        match self.handler.clone().is_some_and(|handler| handler.is_running()) {
             true => {
                 container(
                     column![
