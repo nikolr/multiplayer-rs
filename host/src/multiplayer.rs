@@ -24,6 +24,7 @@ use iced::advanced::text::Wrapping;
 use iced::alignment::Horizontal;
 use sysinfo::{get_current_pid, Pid};
 use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
+use crate::echo;
 
 const HOST_PORT: u16 = 9475;
 const CAPTURE_CHUNK_SIZE: usize = 480;
@@ -48,6 +49,7 @@ pub enum Message {
     Pause,
     Resume,
     Stop,
+    Server,
 }
 
 #[derive(Clone, Debug)]
@@ -204,7 +206,7 @@ impl Default for Multiplayer {
                         match rx_capt.recv() {
                             Ok(data) => {
                                 if data.len() > 3 {
-                                    println!("Sending chunk to {} clients", connected_clients.len());
+                                    // println!("Sending chunk to {} clients", connected_clients.len());
                                     let chunk = HostMessage::Chunk(data);
                                     let output_data = bincode::serde::encode_to_vec::<HostMessage, Configuration>(chunk, Configuration::default()).unwrap();
                                     for client in connected_clients.iter() {
@@ -341,7 +343,9 @@ impl Multiplayer {
                 }
                 self.is_loading = false;
 
-                Task::none()
+                // TODO Remove this temporary testing server spawning
+                Task::perform(echo::run(), |_| Message::Server)
+                // Task::none()
             }
 
             Message::ExportPlaylist => {
@@ -614,6 +618,9 @@ impl Multiplayer {
                 }
                 self.playback_position = 0.0;
 
+                Task::none()
+            }
+            Message::Server => {
                 Task::none()
             }
         }

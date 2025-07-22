@@ -1,7 +1,7 @@
 use bincode::config::Configuration;
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{column, container, Button, Column, Container, Row, Text, TextInput};
-use iced::{Alignment, Element, Length, Task};
+use iced::{Alignment, Element, Length, Subscription, Task};
 use message_io::network::{NetEvent, SendStatus, Transport};
 use message_io::node;
 use message_io::node::{NodeHandler, NodeListener};
@@ -10,6 +10,8 @@ use rodio::buffer::SamplesBuffer;
 use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
 use std::thread;
+use async_tungstenite::tungstenite::client;
+use crate::client_logic;
 
 const SERVER_PORT: u16 = 9475;
 
@@ -17,6 +19,8 @@ pub struct Multiplayer {
     username: String,
     server_address: String,
     handler: Option<NodeHandler<()>>,
+    state: State,
+    messages: Vec<client_logic::Message>,
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +30,14 @@ pub enum Message {
     ClearPressed,
     ConnectPressed,
     DisconnectPressed,
+    // TODO: Remove these and add a more descriptive one
+    Echo(client_logic::Event),
+    Send(client_logic::Message),
+}
+
+enum State {
+    Disconnected,
+    Connected(client_logic::Connection),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -43,14 +55,21 @@ impl Default for Multiplayer {
     fn default() -> Self {
 
         Self {
-            username: String::new(),
+            username: String::from("Username"),
             server_address: String::from("192.168.0.31"),
             handler: None,
+            state: State::Disconnected,
+            messages: Vec::new(),
         }
     }
 }
 
 impl Multiplayer {
+
+    pub fn subscription(&self) -> Subscription<Message> {
+        Subscription::run(client_logic::connect).map(Message::Echo)
+    }
+
     pub fn update(&mut self, message: Message) -> Task<Message>{
         match message {
             Message::UsernameChanged(username) => {
@@ -76,11 +95,11 @@ impl Multiplayer {
                         self.handler = Some(handler.clone());
                         
                         if let Ok((server_id, socket_addr)) = handler.network().connect(Transport::FramedTcp, format!("{address}:{SERVER_PORT}")) {
-                            if socket_addr.ip() == Ipv4Addr::new(0, 0, 0, 0) {
-                                println!("Connection failed");
-                                handler.stop();
-                                return Task::none();
-                            }
+                            // if socket_addr.ip() == Ipv4Addr::new(0, 0, 0, 0) {
+                            //     println!("Connection failed");
+                            //     handler.stop();
+                            //     return Task::none();
+                            // }
                             let username = self.username.clone();
                             let mut opus_decoder = opus::Decoder::new(48000, Stereo).unwrap();
                             let mut opus_decoder_buffer = [0f32; 960];
@@ -162,6 +181,38 @@ impl Multiplayer {
                 
                 Task::none()
             },
+            Message::Send(message) => match &mut self.state {
+                State::Connected(connection) => {
+                    self.username.clear();
+
+                    connection.send(message);
+
+                    Task::none()
+                }
+                State::Disconnected => Task::none(),
+            },
+            Message::Echo(event) => match event {
+                client_logic::Event::Connected(connection) => {
+                    self.state = State::Connected(connection);
+
+                    self.messages.push(client_logic::Message::connected());
+
+                    Task::none()
+                }
+                client_logic::Event::Disconnected => {
+                    self.state = State::Disconnected;
+
+                    self.messages.push(client_logic::Message::disconnected());
+
+                    Task::none()
+                }
+                client_logic::Event::MessageReceived(message) => {
+                    self.messages.push(message);
+                    println!("{:?}", self.messages);
+
+                    Task::none()
+                }
+            },
         }
     }
 
@@ -212,6 +263,13 @@ impl Multiplayer {
                                     Button::new(Text::new("Connect").align_x(Horizontal::Center))
                                         .width(Length::Fill)
                                         .on_press(Message::ConnectPressed),
+                                )
+                                .push(
+                                    Button::new(Text::new("TEST SEND").align_x(Horizontal::Center))
+                                        .width(Length::Fill)
+                                        .on_press(Message::Send(
+                                            client_logic::Message::new(&self.username.clone()).unwrap_or_else(|| client_logic::Message::new("test").unwrap()))
+                                        ),
                                 )
                         ),
                 )
