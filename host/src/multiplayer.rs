@@ -1,8 +1,10 @@
 use crate::playlist::{Playlist, Track};
 use crate::track::{MultiplayerPlaylist, MultiplayerPlaylistMessage, MultiplayerTrack, MultiplayerTrackMessage};
 use bincode::config::Configuration;
-use iced::widget::{button, center, column, container, horizontal_space, row, slider, text, tooltip, vertical_space, Column, Container, Scrollable, Text};
-use iced::{Alignment, Element, Fill, FillPortion, Font, Length, Subscription, Task, Theme};
+use iced::advanced::text::Wrapping;
+use iced::alignment::Horizontal;
+use iced::widget::{button, center, column, container, row, slider, text, tooltip, vertical_space, Column, Container, Scrollable, Text};
+use iced::{Alignment, Element, Fill, FillPortion, Font, Subscription, Task};
 use kira::modulator::tweener::{TweenerBuilder, TweenerHandle};
 use kira::sound::static_sound::StaticSoundHandle;
 use kira::sound::{PlaybackPosition, PlaybackState};
@@ -17,14 +19,11 @@ use rfd::FileHandle;
 use serde::{Deserialize, Serialize};
 use std::cmp::PartialEq;
 use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{error, io, thread};
-use std::sync::{Arc, Mutex};
-use iced::advanced::text::Wrapping;
-use iced::alignment::Horizontal;
 use sysinfo::{get_current_pid, Pid};
 use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
-use crate::echo;
 
 const HOST_PORT: u16 = 9475;
 const CAPTURE_CHUNK_SIZE: usize = 480;
@@ -344,8 +343,8 @@ impl Multiplayer {
                 self.is_loading = false;
 
                 // TODO Remove this temporary testing server spawning
-                Task::perform(echo::run(), |_| Message::Server)
-                // Task::none()
+                // Task::perform(echo::run(), |_| Message::Server)
+                Task::none()
             }
 
             Message::ExportPlaylist => {
@@ -621,6 +620,7 @@ impl Multiplayer {
                 Task::none()
             }
             Message::Server => {
+                println!("Server started");
                 Task::none()
             }
         }

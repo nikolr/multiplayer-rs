@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, thread};
 use iced::futures;
 use iced::stream;
 use iced::widget::text;
@@ -9,6 +9,13 @@ use futures::stream::{Stream, StreamExt};
 
 use async_tungstenite::tungstenite;
 use async_tungstenite::tungstenite::Utf8Bytes;
+use bincode::config::Configuration;
+use message_io::network::{NetEvent, SendStatus, Transport};
+use message_io::node;
+use message_io::node::{NodeEvent, NodeHandler, NodeListener, StoredNetEvent};
+use opus::Channels::Stereo;
+use rodio::buffer::SamplesBuffer;
+use crate::multiplayer::{ClientMessage, HostMessage};
 
 pub fn connect() -> impl Stream<Item = Event> {
     stream::channel(100, |mut output| async move {
@@ -17,58 +24,97 @@ pub fn connect() -> impl Stream<Item = Event> {
         loop {
             match &mut state {
                 State::Disconnected => {
-                    const ECHO_SERVER: &str = "ws://127.0.0.1:3030";
-                    println!("Connecting to echo server: {}", ECHO_SERVER);
 
-                    match async_tungstenite::tokio::connect_async(ECHO_SERVER)
-                        .await
-                    {
-                        Ok((websocket, _)) => {
+                    let (handler, listener): (NodeHandler<()>, NodeListener<()>) = node::split();
+                    let address = "192.168.0.31";
+                    let server_port = 9475;
+                    match handler.network().connect(Transport::FramedTcp, format!("{address}:{server_port}")) {
+                        Ok((server_endpoint, socket_addr)) => {
                             let (sender, receiver) = mpsc::channel(100);
+                            println!("Sent connection");
+                            let _ = output.send(Event::Connected(Connection(sender))).await;
+                            println!("Sent connection");
+                            state = State::Connected(handler.clone(), receiver);
+                            
+                            let mut output_clone = output.clone();
+                            thread::spawn(move || {
 
-                            let _ = output
-                                .send(Event::Connected(Connection(sender)))
-                                .await;
+                                let mut opus_decoder = opus::Decoder::new(48000, Stereo).unwrap();
+                                let mut opus_decoder_buffer = [0f32; 960];
+                                let stream_handle = rodio::OutputStreamBuilder::open_default_stream()
+                                    .expect("open default audio stream");
+                                let sink = rodio::Sink::connect_new(&stream_handle.mixer());
+                                let task = listener.for_each(move |event| match event.network() {
+                                    NetEvent::Connected(endpoint, established) => {
+                                        println!("Connected to server: {}", endpoint);
+                                        if established {
+                                            let audio_request = ClientMessage::AudioRequest(String::from("TESTER"));
+                                            let data = bincode::serde::encode_to_vec::<ClientMessage, Configuration>(audio_request, Configuration::default()).unwrap();
+                                            let send_status = handler.network().send(server_endpoint, data.as_slice());
+                                            match send_status {
+                                                SendStatus::Sent => {
+                                                    println!("Sent audio request");
+                                                }
+                                                SendStatus::MaxPacketSizeExceeded => {}
+                                                SendStatus::ResourceNotFound => {}
+                                                SendStatus::ResourceNotAvailable => {}
+                                            }
+                                        } else {
+                                            println!("Connection failed");
+                                        }
+                                    }
+                                    NetEvent::Accepted(_, _) => {}
 
-                            state = State::Connected(websocket, receiver);
+                                    NetEvent::Message(_, input_data) => {
+                                        let message: (HostMessage, usize) = match bincode::serde::decode_from_slice::<HostMessage, Configuration>(input_data, Configuration::default()) {
+                                            Ok(message) => message,
+                                            Err(err) => {
+                                                println!("Error decoding message: {}", err);
+                                                return;
+                                            }
+                                        };
+                                        match message.0 {
+                                            HostMessage::CanStream(can) => match can {
+                                                true => {
+                                                    println!("Host can stream");
+                                                }
+                                                false => {
+                                                    println!("Host can't stream");
+                                                }
+                                            },
+                                            HostMessage::Chunk(chunk) => {
+                                                match opus_decoder.decode_float(chunk.as_slice(), opus_decoder_buffer.as_mut_slice(), false) {
+                                                    Ok(_result) => {
+                                                        let samples_buffer = SamplesBuffer::new(2, 48000, opus_decoder_buffer);
+                                                        sink.append(samples_buffer);
+                                                    }
+                                                    Err(e) => println!("error: {}", e)
+                                                }
+                                            }
+                                        }
+                                    },
+                                    NetEvent::Disconnected(endpoint) => {
+                                        println!("Disconnected from host: {}", endpoint);
+                                        handler.stop();
+                                        let _ = output_clone.send(Event::Disconnected);
+                                    }
+                                });
+                            });
                         }
-                        Err(_) => {
-                            println!("Failed to connect to echo server");
-                            tokio::time::sleep(
-                                tokio::time::Duration::from_secs(1),
-                            )
-                                .await;
-
-                            let _ = output.send(Event::Disconnected).await;
-                        }
-                    }
+                        Err(_) => {}
                 }
-                State::Connected(websocket, input) => {
-                    let mut fused_websocket = websocket.by_ref().fuse();
-
-                    futures::select! {
-                        received = fused_websocket.select_next_some() => {
-                            match received {
-                                Ok(tungstenite::Message::Text(message)) => {
-                                   let _ = output.send(Event::MessageReceived(Message::User(message.parse().unwrap()))).await;
-                                }
-                                Err(_) => {
-                                    let _ = output.send(Event::Disconnected).await;
-
-                                    state = State::Disconnected;
-                                }
-                                Ok(_) => continue,
-                            }
-                        }
-
-                        message = input.select_next_some() => {
-                            let result = websocket.send(tungstenite::Message::Text(Utf8Bytes::from(message.to_string()))).await;
-
-                            if result.is_err() {
-                                let _ = output.send(Event::Disconnected).await;
-
+            }
+                State::Connected(handler, receiver) => {
+                    if let Some(message) = receiver.next().await {
+                        match message {
+                            Message::Connected => {}
+                            Message::Disconnected => {
+                                println!("Disconnected from server");
+                                handler.stop();
                                 state = State::Disconnected;
                             }
+                            Message::User(_) => {}
+                            Message::Data(_) => {}
                         }
                     }
                 }
@@ -77,13 +123,10 @@ pub fn connect() -> impl Stream<Item = Event> {
     })
 }
 
-#[derive(Debug)]
 enum State {
     Disconnected,
     Connected(
-        async_tungstenite::WebSocketStream<
-            async_tungstenite::tokio::ConnectStream,
-        >,
+        NodeHandler<()>,
         mpsc::Receiver<Message>,
     ),
 }
@@ -96,7 +139,7 @@ pub enum Event {
 }
 
 #[derive(Debug, Clone)]
-pub struct Connection(mpsc::Sender<Message>);
+pub struct Connection(pub(crate) mpsc::Sender<Message>);
 
 impl Connection {
     pub fn send(&mut self, message: Message) {

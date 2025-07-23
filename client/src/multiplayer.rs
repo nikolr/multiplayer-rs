@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
 use std::thread;
 use async_tungstenite::tungstenite::client;
+use iced::futures::SinkExt;
 use crate::client_logic;
+use crate::client_logic::Event;
 
 const SERVER_PORT: u16 = 9475;
 
@@ -21,6 +23,7 @@ pub struct Multiplayer {
     handler: Option<NodeHandler<()>>,
     state: State,
     messages: Vec<client_logic::Message>,
+    connecting: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +63,7 @@ impl Default for Multiplayer {
             handler: None,
             state: State::Disconnected,
             messages: Vec::new(),
+            connecting: false,       
         }
     }
 }
@@ -67,7 +71,12 @@ impl Default for Multiplayer {
 impl Multiplayer {
 
     pub fn subscription(&self) -> Subscription<Message> {
-        Subscription::run(client_logic::connect).map(Message::Echo)
+        if self.connecting {
+            Subscription::run(client_logic::connect).map(Message::Echo)
+        }
+        else {
+            Subscription::none()
+        }
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message>{
@@ -86,91 +95,12 @@ impl Multiplayer {
                 Task::none()
             },
             Message::ConnectPressed => {
+                // TODO: Here flip some state for subscription
+                self.connecting = true;
                 if self.handler.clone().is_some_and(|handler| handler.is_running()) {
                     return Task::none();
                 }
-                match self.server_address.parse::<Ipv4Addr>() {
-                    Ok(address) => {
-                        let (handler, listener): (NodeHandler<()>, NodeListener<()>) = node::split();
-                        self.handler = Some(handler.clone());
-                        
-                        if let Ok((server_id, socket_addr)) = handler.network().connect(Transport::FramedTcp, format!("{address}:{SERVER_PORT}")) {
-                            // if socket_addr.ip() == Ipv4Addr::new(0, 0, 0, 0) {
-                            //     println!("Connection failed");
-                            //     handler.stop();
-                            //     return Task::none();
-                            // }
-                            let username = self.username.clone();
-                            let mut opus_decoder = opus::Decoder::new(48000, Stereo).unwrap();
-                            let mut opus_decoder_buffer = [0f32; 960];
-
-                            thread::spawn(move || {
-                                let stream_handle = rodio::OutputStreamBuilder::open_default_stream()
-                                    .expect("open default audio stream");
-                                let sink = rodio::Sink::connect_new(&stream_handle.mixer());
-
-                                listener.for_each(move |event| match event.network() {
-                                        NetEvent::Connected(endpoint, established) => {
-                                            println!("Connected to server: {}", endpoint);
-                                            if established {
-                                                let audio_request = ClientMessage::AudioRequest(username.clone());
-                                                let data = bincode::serde::encode_to_vec::<ClientMessage, Configuration>(audio_request, Configuration::default()).unwrap();
-                                                let send_status = handler.network().send(server_id, data.as_slice());
-                                                match send_status {
-                                                    SendStatus::Sent => {
-                                                        println!("Sent audio request");
-                                                    }
-                                                    SendStatus::MaxPacketSizeExceeded => {}
-                                                    SendStatus::ResourceNotFound => {}
-                                                    SendStatus::ResourceNotAvailable => {}
-                                                }
-                                            } else {
-                                                println!("Connection failed");
-                                            }
-                                        }
-                                        NetEvent::Accepted(_, _) => {}
-
-                                        NetEvent::Message(_, input_data) => {
-                                            let message: (HostMessage, usize) = match bincode::serde::decode_from_slice::<HostMessage, Configuration>(input_data, Configuration::default()) {
-                                                Ok(message) => message,
-                                                Err(err) => {
-                                                    println!("Error decoding message: {}", err);
-                                                    return;
-                                                }
-                                            };
-                                            match message.0 {
-                                                HostMessage::CanStream(can) => match can {
-                                                    true => {
-                                                        println!("Host can stream");
-                                                    }
-                                                    false => {
-                                                        println!("Host can't stream");
-                                                    }
-                                                },
-                                                HostMessage::Chunk(chunk) => {
-                                                    match opus_decoder.decode_float(chunk.as_slice(), opus_decoder_buffer.as_mut_slice(), false) {
-                                                        Ok(_result) => {
-                                                            let samples_buffer = SamplesBuffer::new(2, 48000, opus_decoder_buffer);
-                                                            sink.append(samples_buffer);
-                                                        }
-                                                        Err(e) => println!("error: {}", e)
-                                                    }
-                                                }
-                                            }
-                                        },
-                                        NetEvent::Disconnected(endpoint) => {
-                                            println!("Disconnected from host: {}", endpoint);
-                                            handler.stop();
-                                        }
-                                });
-                            });
-                        }
-                    }
-                    Err(_) => {
-                        println!("Invalid IP address")
-                    },
-                }
-
+                
                 Task::none()
 
             },
@@ -178,6 +108,18 @@ impl Multiplayer {
                 if let Some(handler) = self.handler.take() {
                     handler.stop();
                 }
+                match &mut self.state {
+                    State::Disconnected => {
+                        println!("Already disconnected");
+                    }
+                    State::Connected(connection) => {
+                        println!("Sending disconnect message");
+                        
+                        connection.send(client_logic::Message::Disconnected)
+                    }
+                }
+                self.state = State::Disconnected;
+                self.connecting = false;
                 
                 Task::none()
             },
@@ -193,6 +135,7 @@ impl Multiplayer {
             },
             Message::Echo(event) => match event {
                 client_logic::Event::Connected(connection) => {
+                    println!("Connected");
                     self.state = State::Connected(connection);
 
                     self.messages.push(client_logic::Message::connected());
@@ -200,6 +143,10 @@ impl Multiplayer {
                     Task::none()
                 }
                 client_logic::Event::Disconnected => {
+                    println!("Disconnected");
+                    if let State::Connected(connection) = &mut self.state {
+                        connection.0.send(client_logic::Message::Disconnected);
+                    }
                     self.state = State::Disconnected;
 
                     self.messages.push(client_logic::Message::disconnected());
@@ -217,8 +164,8 @@ impl Multiplayer {
     }
 
     pub fn view(&self) -> Element<Message> {
-        match self.handler.clone().is_some_and(|handler| handler.is_running()) {
-            true => {
+        match self.state {
+            State::Connected(_) => {
                 container(
                     column![
                         Container::new(Text::new("Connected").center().align_x(Horizontal::Center)),
@@ -232,7 +179,7 @@ impl Multiplayer {
                     .align_y(Vertical::Center)
                     .into()
             }
-            false => {
+            State::Disconnected => {
                 let content: Element<Message> = Container::new(
                     Column::new()
                         .align_x(Alignment::Center)
@@ -267,9 +214,12 @@ impl Multiplayer {
                                 .push(
                                     Button::new(Text::new("TEST SEND").align_x(Horizontal::Center))
                                         .width(Length::Fill)
-                                        .on_press(Message::Send(
-                                            client_logic::Message::new(&self.username.clone()).unwrap_or_else(|| client_logic::Message::new("test").unwrap()))
-                                        ),
+                                        // .on_press(Message::Send(
+                                        //     client_logic::Message::new(&self.username.clone()).unwrap_or_else(|| client_logic::Message::new("test").unwrap()))
+                                        // ),
+                                    .on_press(Message::Send(
+                                        client_logic::Message::Disconnected)
+                                    ),
                                 )
                         ),
                 )

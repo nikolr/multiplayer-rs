@@ -41,12 +41,15 @@ async fn user_connected(ws: WebSocket) {
     
     println!("User connected");
 
+    // tokio::task::spawn(async move {
+    //     while let Some(message) = rx.next().await {
+    //         user_ws_tx.send(message).await.unwrap_or_else(|e| {
+    //             eprintln!("websocket send error: {e}");
+    //         });
+    //     }
+    // });
     tokio::task::spawn(async move {
-        while let Some(message) = rx.next().await {
-            user_ws_tx.send(message).await.unwrap_or_else(|e| {
-                eprintln!("websocket send error: {e}");
-            });
-        }
+        user_ws_tx.send(warp::ws::Message::text("Hello!")).await.unwrap();
     });
 
     while let Some(result) = user_ws_rx.next().await {
