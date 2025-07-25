@@ -113,117 +113,117 @@ impl Client {
 
 impl Default for Multiplayer {
     fn default() -> Self {
-        let process_id = get_current_pid().unwrap();
-        let (tx_capt, rx_capt): (
-            std::sync::mpsc::SyncSender<Vec<u8>>,
-            std::sync::mpsc::Receiver<Vec<u8>>,
-        ) = std::sync::mpsc::sync_channel(2);
-
-        let _handle = thread::Builder::new()
-            .name("Capture".to_string())
-            .spawn(move || {
-                let result = capture_loop(tx_capt, CAPTURE_CHUNK_SIZE, process_id);
-                if let Err(_err) = result {
-                    println!("Capture thread exited with error: {}", _err);
-                }
-            });
-
-        let (handler, listener): (NodeHandler<Signal>, NodeListener<Signal>) = node::split();
-        // let (resource_id, socket_addr) = handler.network().listen(Transport::FramedTcp, "127.0.0.1:9475").unwrap();
-        let gateway_ip = match reqwest::blocking::get("https://api.ipify.org") {
-            Ok(response) => {
-                let ip = response.text().unwrap();
-                ip
-            },
-            Err(err) => {
-                println!("Error getting gateway IP: {}", err);
-                String::from("127.0.0.1")
-            }
-        };
-
-        let ip = match local_ip_address::local_ip() {
-            Ok(ip_addr) => {
-                ip_addr.to_string()
-            }
-            Err(error) => {
-                println!("Error getting local IP: {}", error);
-                String::from("127.0.0.1")
-            }
-        };
-
-        let (resource_id, socket_addr) = handler.network().listen(Transport::FramedTcp, format!("{ip}:{HOST_PORT}")).unwrap();
-
-        let connected_clients = Arc::new(Mutex::new(Vec::new()));
-        let connected_clients_clone = Arc::clone(&connected_clients);
-        
-        thread::spawn(move || {
-            println!("Listening on {}", socket_addr);
-            let mut connected_clients: Vec<Endpoint> = Vec::new();
-            listener.for_each(move |event| match event {
-                NodeEvent::Network(net_event) => match net_event {
-                    NetEvent::Connected(endpoint, established) => {}
-                    NetEvent::Accepted(_, _) => {}
-                    NetEvent::Message(endpoint, input_data) => {
-                        let message: (ClientMessage, usize) = match bincode::serde::decode_from_slice::<ClientMessage, Configuration>(input_data, Configuration::default()) {
-                            Ok(message) => message,
-                            Err(err) => {
-                                println!("Error decoding message: {}", err);
-                                return;
-                            }
-                        };
-                        match message.0 {
-                            ClientMessage::AudioRequest(username) => {
-                                println!("Audio request received from {}", endpoint);
-                                connected_clients.push(endpoint);
-                                let output_data = bincode::serde::encode_to_vec::<HostMessage, Configuration>(HostMessage::CanStream(true), Configuration::default()).unwrap();
-                                let send_status = handler.network().send(endpoint, &output_data);
-                                match send_status {
-                                    SendStatus::Sent => {
-                                        let clients = Arc::clone(&connected_clients_clone);
-                                        clients.lock().unwrap().push(Client {endpoint, username});
-                                        handler.signals().send(Signal::SendChunk);
-                                    }
-                                    SendStatus::MaxPacketSizeExceeded => {}
-                                    SendStatus::ResourceNotFound => {}
-                                    SendStatus::ResourceNotAvailable => {}
-                                }
-                            },
-
-                        }
-                    }
-                    NetEvent::Disconnected(endpoint) => {
-                        println!("Client disconnected: {}", endpoint);
-                        connected_clients.retain(|client| client != &endpoint);
-                        let connected = Arc::clone(&connected_clients_clone);
-                        let mut clients = connected.lock().unwrap();
-                        if let Some(index) = clients.iter().position(|client| client.endpoint == endpoint) {
-                            clients.remove(index);
-                        }
-                    }
-                }
-                NodeEvent::Signal(signal) => match signal {
-                    Signal::SendChunk => {
-                        match rx_capt.recv() {
-                            Ok(data) => {
-                                if data.len() > 3 {
-                                    // println!("Sending chunk to {} clients", connected_clients.len());
-                                    let chunk = HostMessage::Chunk(data);
-                                    let output_data = bincode::serde::encode_to_vec::<HostMessage, Configuration>(chunk, Configuration::default()).unwrap();
-                                    for client in connected_clients.iter() {
-                                        handler.network().send(*client, output_data.as_slice());
-                                    }
-                                }
-                                handler.signals().send_with_timer(Signal::SendChunk, Duration::from_micros(10));
-                            }
-
-                            Err(error) => {
-                                println!("Error receiving chunk from capture: {}", error);
-                            }
-                        }
-                    }
-                }
-            })
-        });
+        // let process_id = get_current_pid().unwrap();
+        // let (tx_capt, rx_capt): (
+        //     std::sync::mpsc::SyncSender<Vec<u8>>,
+        //     std::sync::mpsc::Receiver<Vec<u8>>,
+        // ) = std::sync::mpsc::sync_channel(2);
+        // 
+        // let _handle = thread::Builder::new()
+        //     .name("Capture".to_string())
+        //     .spawn(move || {
+        //         let result = capture_loop(tx_capt, CAPTURE_CHUNK_SIZE, process_id);
+        //         if let Err(_err) = result {
+        //             println!("Capture thread exited with error: {}", _err);
+        //         }
+        //     });
+        // 
+        // let (handler, listener): (NodeHandler<Signal>, NodeListener<Signal>) = node::split();
+        // // let (resource_id, socket_addr) = handler.network().listen(Transport::FramedTcp, "127.0.0.1:9475").unwrap();
+        // let gateway_ip = match reqwest::blocking::get("https://api.ipify.org") {
+        //     Ok(response) => {
+        //         let ip = response.text().unwrap();
+        //         ip
+        //     },
+        //     Err(err) => {
+        //         println!("Error getting gateway IP: {}", err);
+        //         String::from("127.0.0.1")
+        //     }
+        // };
+        // 
+        // let ip = match local_ip_address::local_ip() {
+        //     Ok(ip_addr) => {
+        //         ip_addr.to_string()
+        //     }
+        //     Err(error) => {
+        //         println!("Error getting local IP: {}", error);
+        //         String::from("127.0.0.1")
+        //     }
+        // };
+        // 
+        // let (resource_id, socket_addr) = handler.network().listen(Transport::FramedTcp, format!("{ip}:{HOST_PORT}")).unwrap();
+        // 
+        // let connected_clients = Arc::new(Mutex::new(Vec::new()));
+        // let connected_clients_clone = Arc::clone(&connected_clients);
+        // 
+        // thread::spawn(move || {
+        //     println!("Listening on {}", socket_addr);
+        //     let mut connected_clients: Vec<Endpoint> = Vec::new();
+        //     listener.for_each(move |event| match event {
+        //         NodeEvent::Network(net_event) => match net_event {
+        //             NetEvent::Connected(endpoint, established) => {}
+        //             NetEvent::Accepted(_, _) => {}
+        //             NetEvent::Message(endpoint, input_data) => {
+        //                 let message: (ClientMessage, usize) = match bincode::serde::decode_from_slice::<ClientMessage, Configuration>(input_data, Configuration::default()) {
+        //                     Ok(message) => message,
+        //                     Err(err) => {
+        //                         println!("Error decoding message: {}", err);
+        //                         return;
+        //                     }
+        //                 };
+        //                 match message.0 {
+        //                     ClientMessage::AudioRequest(username) => {
+        //                         println!("Audio request received from {}", endpoint);
+        //                         connected_clients.push(endpoint);
+        //                         let output_data = bincode::serde::encode_to_vec::<HostMessage, Configuration>(HostMessage::CanStream(true), Configuration::default()).unwrap();
+        //                         let send_status = handler.network().send(endpoint, &output_data);
+        //                         match send_status {
+        //                             SendStatus::Sent => {
+        //                                 let clients = Arc::clone(&connected_clients_clone);
+        //                                 clients.lock().unwrap().push(Client {endpoint, username});
+        //                                 handler.signals().send(Signal::SendChunk);
+        //                             }
+        //                             SendStatus::MaxPacketSizeExceeded => {}
+        //                             SendStatus::ResourceNotFound => {}
+        //                             SendStatus::ResourceNotAvailable => {}
+        //                         }
+        //                     },
+        // 
+        //                 }
+        //             }
+        //             NetEvent::Disconnected(endpoint) => {
+        //                 println!("Client disconnected: {}", endpoint);
+        //                 connected_clients.retain(|client| client != &endpoint);
+        //                 let connected = Arc::clone(&connected_clients_clone);
+        //                 let mut clients = connected.lock().unwrap();
+        //                 if let Some(index) = clients.iter().position(|client| client.endpoint == endpoint) {
+        //                     clients.remove(index);
+        //                 }
+        //             }
+        //         }
+        //         NodeEvent::Signal(signal) => match signal {
+        //             Signal::SendChunk => {
+        //                 match rx_capt.recv() {
+        //                     Ok(data) => {
+        //                         if data.len() > 3 {
+        //                             // println!("Sending chunk to {} clients", connected_clients.len());
+        //                             let chunk = HostMessage::Chunk(data);
+        //                             let output_data = bincode::serde::encode_to_vec::<HostMessage, Configuration>(chunk, Configuration::default()).unwrap();
+        //                             for client in connected_clients.iter() {
+        //                                 handler.network().send(*client, output_data.as_slice());
+        //                             }
+        //                         }
+        //                         handler.signals().send_with_timer(Signal::SendChunk, Duration::from_micros(10));
+        //                     }
+        // 
+        //                     Err(error) => {
+        //                         println!("Error receiving chunk from capture: {}", error);
+        //                     }
+        //                 }
+        //             }
+        //         }
+        //     })
+        // });
 
         let mut audio_manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default()).unwrap();
         let primary_tweener = audio_manager.add_modulator(
@@ -269,7 +269,8 @@ impl Default for Multiplayer {
             fade_in_duration: 600,
             fade_out_duration: 600,
             audio_seek_dragged: false,
-            connected_clients: connected_clients,
+            // connected_clients: connected_clients,
+            connected_clients: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }

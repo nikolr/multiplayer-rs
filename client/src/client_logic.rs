@@ -6,68 +6,75 @@ use iced::widget::text;
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::stream::{Stream, StreamExt};
-
-use async_tungstenite::tungstenite;
-use async_tungstenite::tungstenite::Utf8Bytes;
+use opus::Channels::Stereo;
+use tokio::io;
+use tokio::io::AsyncReadExt;
+use tokio::net::{TcpStream};
 
 pub fn connect() -> impl Stream<Item = Event> {
     stream::channel(100, |mut output| async move {
         let mut state = State::Disconnected;
-
         loop {
             match &mut state {
                 State::Disconnected => {
-                    const ECHO_SERVER: &str = "ws://127.0.0.1:3030";
-                    println!("Connecting to echo server: {}", ECHO_SERVER);
-
-                    match async_tungstenite::tokio::connect_async(ECHO_SERVER)
-                        .await
-                    {
-                        Ok((websocket, _)) => {
+                    const MULTIPLAYER_SERVER: &str = "127.0.0.1:9475";
+                    println!("Connecting to multiplayer server: {}", MULTIPLAYER_SERVER);
+                    
+                    match TcpStream::connect(MULTIPLAYER_SERVER).await {
+                        Ok(stream) => {
                             let (sender, receiver) = mpsc::channel(100);
 
                             let _ = output
                                 .send(Event::Connected(Connection(sender)))
                                 .await;
 
-                            state = State::Connected(websocket, receiver);
+                            state = State::Connected(stream, receiver);
                         }
                         Err(_) => {
-                            println!("Failed to connect to echo server");
-                            tokio::time::sleep(
-                                tokio::time::Duration::from_secs(1),
-                            )
-                                .await;
-
+                            println!("Failed to connect to multiplayer server");
+                            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
                             let _ = output.send(Event::Disconnected).await;
                         }
                     }
                 }
-                State::Connected(websocket, input) => {
-                    let mut fused_websocket = websocket.by_ref().fuse();
-
-                    futures::select! {
-                        received = fused_websocket.select_next_some() => {
-                            match received {
-                                Ok(tungstenite::Message::Text(message)) => {
-                                   let _ = output.send(Event::MessageReceived(Message::User(message.parse().unwrap()))).await;
-                                }
-                                Err(_) => {
-                                    let _ = output.send(Event::Disconnected).await;
-
-                                    state = State::Disconnected;
-                                }
-                                Ok(_) => continue,
+                State::Connected(stream, rx) => {
+                    loop {
+                        // Wait for the socket to be readable
+                        match stream.readable().await {
+                            Ok(_) => {
+                                println!("socket is readable");
+                            }
+                            Err(e) => {
+                                println!("error: {}", e);
+                                let _ = output.send(Event::Disconnected).await;
+                                break;
                             }
                         }
 
-                        message = input.select_next_some() => {
-                            let result = websocket.send(tungstenite::Message::Text(Utf8Bytes::from(message.to_string()))).await;
+                        // Creating the buffer **after** the `await` prevents it from
+                        // being stored in the async task.
+                        let mut buf = [0; 80];
 
-                            if result.is_err() {
+                        // Try to read data, this may still fail with `WouldBlock`
+                        // if the readiness event is a false positive.
+                        match stream.try_read(&mut buf) {
+                            Ok(0) => {
+                                println!("connection closed");
                                 let _ = output.send(Event::Disconnected).await;
-
-                                state = State::Disconnected;
+                                break;
+                            },
+                            Ok(n) => {
+                                println!("read {} bytes", n);
+                                println!("{:?}", buf);
+                                let _ = output.send(Event::DataReceived(buf)).await;
+                            }
+                            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                                continue;
+                            }
+                            Err(e) => {
+                                println!("error: {}", e);
+                                let _ = output.send(Event::Disconnected).await;
+                                break;
                             }
                         }
                     }
@@ -81,9 +88,7 @@ pub fn connect() -> impl Stream<Item = Event> {
 enum State {
     Disconnected,
     Connected(
-        async_tungstenite::WebSocketStream<
-            async_tungstenite::tokio::ConnectStream,
-        >,
+        TcpStream,
         mpsc::Receiver<Message>,
     ),
 }
@@ -92,7 +97,7 @@ enum State {
 pub enum Event {
     Connected(Connection),
     Disconnected,
-    MessageReceived(Message),
+    DataReceived([u8; 80]),
 }
 
 #[derive(Debug, Clone)]

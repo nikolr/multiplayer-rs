@@ -1,16 +1,12 @@
-use bincode::config::Configuration;
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{column, container, Button, Column, Container, Row, Text, TextInput};
 use iced::{Alignment, Element, Length, Subscription, Task};
-use message_io::network::{NetEvent, SendStatus, Transport};
-use message_io::node;
-use message_io::node::{NodeHandler, NodeListener};
 use opus::Channels::Stereo;
 use rodio::buffer::SamplesBuffer;
 use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
 use std::thread;
-use async_tungstenite::tungstenite::client;
+use rodio::OutputStream;
 use crate::client_logic;
 
 const SERVER_PORT: u16 = 9475;
@@ -18,9 +14,10 @@ const SERVER_PORT: u16 = 9475;
 pub struct Multiplayer {
     username: String,
     server_address: String,
-    handler: Option<NodeHandler<()>>,
     state: State,
-    messages: Vec<client_logic::Message>,
+    opus_decoder: opus::Decoder,
+    output_stream: OutputStream,
+    sink: rodio::Sink,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +33,7 @@ pub enum Message {
 }
 
 enum State {
+    Connecting,
     Disconnected,
     Connected(client_logic::Connection),
 }
@@ -54,12 +52,17 @@ pub enum HostMessage {
 impl Default for Multiplayer {
     fn default() -> Self {
 
+        let stream_handle = rodio::OutputStreamBuilder::open_default_stream()
+            .expect("open default audio stream");
+        let sink = rodio::Sink::connect_new(&stream_handle.mixer());
+        let opus_decoder = opus::Decoder::new(48000, Stereo).unwrap();
         Self {
             username: String::from("Username"),
             server_address: String::from("192.168.0.31"),
-            handler: None,
             state: State::Disconnected,
-            messages: Vec::new(),
+            output_stream: stream_handle,
+            opus_decoder,
+            sink
         }
     }
 }
@@ -83,101 +86,99 @@ impl Multiplayer {
                 Task::none()
             },
             Message::ClearPressed => {
+                
                 Task::none()
             },
             Message::ConnectPressed => {
-                if self.handler.clone().is_some_and(|handler| handler.is_running()) {
-                    return Task::none();
-                }
-                match self.server_address.parse::<Ipv4Addr>() {
-                    Ok(address) => {
-                        let (handler, listener): (NodeHandler<()>, NodeListener<()>) = node::split();
-                        self.handler = Some(handler.clone());
-                        
-                        if let Ok((server_id, socket_addr)) = handler.network().connect(Transport::FramedTcp, format!("{address}:{SERVER_PORT}")) {
-                            // if socket_addr.ip() == Ipv4Addr::new(0, 0, 0, 0) {
-                            //     println!("Connection failed");
-                            //     handler.stop();
-                            //     return Task::none();
-                            // }
-                            let username = self.username.clone();
-                            let mut opus_decoder = opus::Decoder::new(48000, Stereo).unwrap();
-                            let mut opus_decoder_buffer = [0f32; 960];
-
-                            thread::spawn(move || {
-                                let stream_handle = rodio::OutputStreamBuilder::open_default_stream()
-                                    .expect("open default audio stream");
-                                let sink = rodio::Sink::connect_new(&stream_handle.mixer());
-
-                                listener.for_each(move |event| match event.network() {
-                                        NetEvent::Connected(endpoint, established) => {
-                                            println!("Connected to server: {}", endpoint);
-                                            if established {
-                                                let audio_request = ClientMessage::AudioRequest(username.clone());
-                                                let data = bincode::serde::encode_to_vec::<ClientMessage, Configuration>(audio_request, Configuration::default()).unwrap();
-                                                let send_status = handler.network().send(server_id, data.as_slice());
-                                                match send_status {
-                                                    SendStatus::Sent => {
-                                                        println!("Sent audio request");
-                                                    }
-                                                    SendStatus::MaxPacketSizeExceeded => {}
-                                                    SendStatus::ResourceNotFound => {}
-                                                    SendStatus::ResourceNotAvailable => {}
-                                                }
-                                            } else {
-                                                println!("Connection failed");
-                                            }
-                                        }
-                                        NetEvent::Accepted(_, _) => {}
-
-                                        NetEvent::Message(_, input_data) => {
-                                            let message: (HostMessage, usize) = match bincode::serde::decode_from_slice::<HostMessage, Configuration>(input_data, Configuration::default()) {
-                                                Ok(message) => message,
-                                                Err(err) => {
-                                                    println!("Error decoding message: {}", err);
-                                                    return;
-                                                }
-                                            };
-                                            match message.0 {
-                                                HostMessage::CanStream(can) => match can {
-                                                    true => {
-                                                        println!("Host can stream");
-                                                    }
-                                                    false => {
-                                                        println!("Host can't stream");
-                                                    }
-                                                },
-                                                HostMessage::Chunk(chunk) => {
-                                                    match opus_decoder.decode_float(chunk.as_slice(), opus_decoder_buffer.as_mut_slice(), false) {
-                                                        Ok(_result) => {
-                                                            let samples_buffer = SamplesBuffer::new(2, 48000, opus_decoder_buffer);
-                                                            sink.append(samples_buffer);
-                                                        }
-                                                        Err(e) => println!("error: {}", e)
-                                                    }
-                                                }
-                                            }
-                                        },
-                                        NetEvent::Disconnected(endpoint) => {
-                                            println!("Disconnected from host: {}", endpoint);
-                                            handler.stop();
-                                        }
-                                });
-                            });
-                        }
-                    }
-                    Err(_) => {
-                        println!("Invalid IP address")
-                    },
-                }
+                // if self.handler.clone().is_some_and(|handler| handler.is_running()) {
+                //     return Task::none();
+                // }
+                // match self.server_address.parse::<Ipv4Addr>() {
+                //     Ok(address) => {
+                //         let (handler, listener): (NodeHandler<()>, NodeListener<()>) = node::split();
+                //         self.handler = Some(handler.clone());
+                //         
+                //         if let Ok((server_id, socket_addr)) = handler.network().connect(Transport::FramedTcp, format!("{address}:{SERVER_PORT}")) {
+                //             // if socket_addr.ip() == Ipv4Addr::new(0, 0, 0, 0) {
+                //             //     println!("Connection failed");
+                //             //     handler.stop();
+                //             //     return Task::none();
+                //             // }
+                //             let username = self.username.clone();
+                //             let mut opus_decoder = opus::Decoder::new(48000, Stereo).unwrap();
+                //             let mut opus_decoder_buffer = [0f32; 960];
+                // 
+                //             thread::spawn(move || {
+                //                 let stream_handle = rodio::OutputStreamBuilder::open_default_stream()
+                //                     .expect("open default audio stream");
+                //                 let sink = rodio::Sink::connect_new(&stream_handle.mixer());
+                // 
+                //                 listener.for_each(move |event| match event.network() {
+                //                         NetEvent::Connected(endpoint, established) => {
+                //                             println!("Connected to server: {}", endpoint);
+                //                             if established {
+                //                                 let audio_request = ClientMessage::AudioRequest(username.clone());
+                //                                 let data = bincode::serde::encode_to_vec::<ClientMessage, Configuration>(audio_request, Configuration::default()).unwrap();
+                //                                 let send_status = handler.network().send(server_id, data.as_slice());
+                //                                 match send_status {
+                //                                     SendStatus::Sent => {
+                //                                         println!("Sent audio request");
+                //                                     }
+                //                                     SendStatus::MaxPacketSizeExceeded => {}
+                //                                     SendStatus::ResourceNotFound => {}
+                //                                     SendStatus::ResourceNotAvailable => {}
+                //                                 }
+                //                             } else {
+                //                                 println!("Connection failed");
+                //                             }
+                //                         }
+                //                         NetEvent::Accepted(_, _) => {}
+                // 
+                //                         NetEvent::Message(_, input_data) => {
+                //                             let message: (HostMessage, usize) = match bincode::serde::decode_from_slice::<HostMessage, Configuration>(input_data, Configuration::default()) {
+                //                                 Ok(message) => message,
+                //                                 Err(err) => {
+                //                                     println!("Error decoding message: {}", err);
+                //                                     return;
+                //                                 }
+                //                             };
+                //                             match message.0 {
+                //                                 HostMessage::CanStream(can) => match can {
+                //                                     true => {
+                //                                         println!("Host can stream");
+                //                                     }
+                //                                     false => {
+                //                                         println!("Host can't stream");
+                //                                     }
+                //                                 },
+                //                                 HostMessage::Chunk(chunk) => {
+                //                                     match opus_decoder.decode_float(chunk.as_slice(), opus_decoder_buffer.as_mut_slice(), false) {
+                //                                         Ok(_result) => {
+                //                                             let samples_buffer = SamplesBuffer::new(2, 48000, opus_decoder_buffer);
+                //                                             sink.append(samples_buffer);
+                //                                         }
+                //                                         Err(e) => println!("error: {}", e)
+                //                                     }
+                //                                 }
+                //                             }
+                //                         },
+                //                         NetEvent::Disconnected(endpoint) => {
+                //                             println!("Disconnected from host: {}", endpoint);
+                //                             handler.stop();
+                //                         }
+                //                 });
+                //             });
+                //         }
+                //     }
+                //     Err(_) => {
+                //         println!("Invalid IP address")
+                //     },
+                // }
 
                 Task::none()
 
             },
             Message::DisconnectPressed => {
-                if let Some(handler) = self.handler.take() {
-                    handler.stop();
-                }
                 
                 Task::none()
             },
@@ -190,25 +191,32 @@ impl Multiplayer {
                     Task::none()
                 }
                 State::Disconnected => Task::none(),
+                State::Connecting => Task::none(),
             },
             Message::Echo(event) => match event {
                 client_logic::Event::Connected(connection) => {
+                    println!("Received Connected Event");
                     self.state = State::Connected(connection);
-
-                    self.messages.push(client_logic::Message::connected());
 
                     Task::none()
                 }
                 client_logic::Event::Disconnected => {
+                    println!("Received Disconnected Event");
                     self.state = State::Disconnected;
-
-                    self.messages.push(client_logic::Message::disconnected());
 
                     Task::none()
                 }
-                client_logic::Event::MessageReceived(message) => {
-                    self.messages.push(message);
-                    println!("{:?}", self.messages);
+                client_logic::Event::DataReceived(data) => {
+                    println!("Received Data Event");
+                    let mut opus_decoder_buffer = [0f32; 960];
+                    match self.opus_decoder.decode_float(&data, opus_decoder_buffer.as_mut_slice(), false) {
+                        Ok(_result) => {
+                            println!("Decoded data samples per channel {:#?}", _result);
+                            let samples_buffer = SamplesBuffer::new(2, 48000, opus_decoder_buffer);
+                            self.sink.append(samples_buffer); 
+                        }
+                        Err(e) => println!("error: {}", e)
+                    } 
 
                     Task::none()
                 }
@@ -217,8 +225,8 @@ impl Multiplayer {
     }
 
     pub fn view(&self) -> Element<Message> {
-        match self.handler.clone().is_some_and(|handler| handler.is_running()) {
-            true => {
+        match self.state {
+            State::Connected(_) => {
                 container(
                     column![
                         Container::new(Text::new("Connected").center().align_x(Horizontal::Center)),
@@ -232,7 +240,7 @@ impl Multiplayer {
                     .align_y(Vertical::Center)
                     .into()
             }
-            false => {
+            State::Disconnected | State::Connecting => {
                 let content: Element<Message> = Container::new(
                     Column::new()
                         .align_x(Alignment::Center)
@@ -277,7 +285,7 @@ impl Multiplayer {
                     .align_y(Vertical::Center)
                     .into();
                 content
-            }
+            },
         }
     }
 }
