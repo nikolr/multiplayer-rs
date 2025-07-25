@@ -1,2 +1,2 @@
 pub mod multiplayer;
-mod client_logic;
+mod stream;

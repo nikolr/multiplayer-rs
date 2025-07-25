@@ -1,17 +1,13 @@
-use std::{error, thread};
+use opus::Bitrate;
+use opus::ErrorCode as OpusErrorCode;
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use bincode::config::Configuration;
-use iced::futures;
+use std::{error, thread};
 use sysinfo::{get_current_pid, Pid};
 use tokio::io;
-use tokio::net::{TcpListener, UdpSocket};
+use tokio::net::TcpListener;
 use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
-use opus::Bitrate;
-use opus::ErrorCode as OpusErrorCode;
-use tokio::io::AsyncWriteExt;
 
 const HOST_PORT: u16 = 9475;
 const CAPTURE_CHUNK_SIZE: usize = 480;

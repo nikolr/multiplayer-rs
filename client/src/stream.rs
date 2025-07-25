@@ -1,15 +1,13 @@
-use std::fmt;
 use iced::futures;
 use iced::stream;
 use iced::widget::text;
+use std::fmt;
 
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
-use futures::stream::{Stream, StreamExt};
-use opus::Channels::Stereo;
+use futures::stream::Stream;
 use tokio::io;
-use tokio::io::AsyncReadExt;
-use tokio::net::{TcpStream};
+use tokio::net::TcpStream;
 
 pub fn connect() -> impl Stream<Item = Event> {
     stream::channel(100, |mut output| async move {
@@ -106,7 +104,7 @@ impl Connection {
     pub fn send(&mut self, message: Message) {
         self.0
             .try_send(message)
-            .expect("Send message to echo server");
+            .expect("Send message to multiplayer server");
     }
 }
 
