@@ -16,9 +16,10 @@ use opus::ErrorCode as OpusErrorCode;
 use rfd::FileHandle;
 use serde::{Deserialize, Serialize};
 use std::cmp::PartialEq;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 use std::{error, io, thread};
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use iced::advanced::text::Wrapping;
 use iced::alignment::Horizontal;
@@ -95,22 +96,8 @@ pub struct Multiplayer {
     fade_in_duration: u64,
     fade_out_duration: u64,
     audio_seek_dragged: bool,
-    connected_clients: Arc<Mutex<Vec<Client>>>,
+    connected_clients: Arc<Mutex<HashMap<SocketAddr, String>>>,
 }
-
-#[derive(Clone, Debug)]
-struct Client {
-    endpoint: Endpoint,
-    username: String,
-}
-
-impl Client {
-    fn view(&self) -> Element<Message> {
-        Text::new(format!("{}", &self.endpoint))
-            .into()
-    }
-}
-
 impl Default for Multiplayer {
     fn default() -> Self {
         // let process_id = get_current_pid().unwrap();
@@ -118,7 +105,7 @@ impl Default for Multiplayer {
         //     std::sync::mpsc::SyncSender<Vec<u8>>,
         //     std::sync::mpsc::Receiver<Vec<u8>>,
         // ) = std::sync::mpsc::sync_channel(2);
-        // 
+        //
         // let _handle = thread::Builder::new()
         //     .name("Capture".to_string())
         //     .spawn(move || {
@@ -127,7 +114,7 @@ impl Default for Multiplayer {
         //             println!("Capture thread exited with error: {}", _err);
         //         }
         //     });
-        // 
+        //
         // let (handler, listener): (NodeHandler<Signal>, NodeListener<Signal>) = node::split();
         // // let (resource_id, socket_addr) = handler.network().listen(Transport::FramedTcp, "127.0.0.1:9475").unwrap();
         // let gateway_ip = match reqwest::blocking::get("https://api.ipify.org") {
@@ -140,7 +127,7 @@ impl Default for Multiplayer {
         //         String::from("127.0.0.1")
         //     }
         // };
-        // 
+        //
         // let ip = match local_ip_address::local_ip() {
         //     Ok(ip_addr) => {
         //         ip_addr.to_string()
@@ -150,12 +137,12 @@ impl Default for Multiplayer {
         //         String::from("127.0.0.1")
         //     }
         // };
-        // 
+        //
         // let (resource_id, socket_addr) = handler.network().listen(Transport::FramedTcp, format!("{ip}:{HOST_PORT}")).unwrap();
-        // 
+        //
         // let connected_clients = Arc::new(Mutex::new(Vec::new()));
         // let connected_clients_clone = Arc::clone(&connected_clients);
-        // 
+        //
         // thread::spawn(move || {
         //     println!("Listening on {}", socket_addr);
         //     let mut connected_clients: Vec<Endpoint> = Vec::new();
@@ -188,7 +175,7 @@ impl Default for Multiplayer {
         //                             SendStatus::ResourceNotAvailable => {}
         //                         }
         //                     },
-        // 
+        //
         //                 }
         //             }
         //             NetEvent::Disconnected(endpoint) => {
@@ -215,7 +202,7 @@ impl Default for Multiplayer {
         //                         }
         //                         handler.signals().send_with_timer(Signal::SendChunk, Duration::from_micros(10));
         //                     }
-        // 
+        //
         //                     Err(error) => {
         //                         println!("Error receiving chunk from capture: {}", error);
         //                     }
@@ -270,7 +257,7 @@ impl Default for Multiplayer {
             fade_out_duration: 600,
             audio_seek_dragged: false,
             // connected_clients: connected_clients,
-            connected_clients: Arc::new(Mutex::new(Vec::new())),
+            connected_clients: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -345,7 +332,7 @@ impl Multiplayer {
                 self.is_loading = false;
 
                 // TODO Remove this temporary testing server spawning
-                Task::perform(echo::run(), |_| Message::Server)
+                Task::perform(echo::run(self.connected_clients.clone()), |_| Message::Server)
                 // Task::none()
             }
 
@@ -603,11 +590,6 @@ impl Multiplayer {
             }
 
             Message::Stop => {
-                let clients = self.connected_clients.lock().unwrap();
-                println!("Clients: {}", clients.len());
-                for client in clients.iter() {
-                    println!("Client: {}", client.endpoint)
-                }
                 if self.currently_playing_static_sound_handle.is_some() {
                     self.currently_playing_static_sound_handle.as_mut().unwrap().stop(Tween {
                         start_time: StartTime::Immediate,
@@ -662,7 +644,7 @@ impl Multiplayer {
         let connected_clients = Arc::clone(&self.connected_clients);
         let clients = connected_clients.lock().unwrap();
         let client_views = clients.iter().map(|client| {
-            Text::new(format!("{}", client.username))
+            Text::new(format!("{}", client.0))
                 .wrapping(Wrapping::None)
                 .size(18)
                 .into()

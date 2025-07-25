@@ -42,7 +42,6 @@ pub fn connect() -> impl Stream<Item = Event> {
                         // Wait for the socket to be readable
                         match stream.readable().await {
                             Ok(_) => {
-                                println!("socket is readable");
                             }
                             Err(e) => {
                                 println!("error: {}", e);
@@ -61,11 +60,10 @@ pub fn connect() -> impl Stream<Item = Event> {
                             Ok(0) => {
                                 println!("connection closed");
                                 let _ = output.send(Event::Disconnected).await;
+                                state = State::Disconnected;
                                 break;
                             },
                             Ok(n) => {
-                                println!("read {} bytes", n);
-                                println!("{:?}", buf);
                                 let _ = output.send(Event::DataReceived(buf)).await;
                             }
                             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -74,6 +72,7 @@ pub fn connect() -> impl Stream<Item = Event> {
                             Err(e) => {
                                 println!("error: {}", e);
                                 let _ = output.send(Event::Disconnected).await;
+                                state = State::Disconnected;
                                 break;
                             }
                         }

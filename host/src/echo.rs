@@ -1,5 +1,7 @@
 use std::{error, thread};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use bincode::config::Configuration;
 use iced::futures;
@@ -15,7 +17,8 @@ const HOST_PORT: u16 = 9475;
 const CAPTURE_CHUNK_SIZE: usize = 480;
 const BIT_RATE: i32 = 64000;
 const CHANNELS: u16 = 2;
-pub async fn run() -> io::Result<()> {
+
+pub async fn run(clients: Arc<Mutex<HashMap<SocketAddr, String>>>) -> io::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:9475").await?;
     
     let process_id = get_current_pid().unwrap();
@@ -33,19 +36,42 @@ pub async fn run() -> io::Result<()> {
                 println!("Capture thread exited with error: {}", _err);
             }
         });
-    
+
     println!("Listening on port {}", HOST_PORT);
 
     loop {
         let (mut stream, addr) = listener.accept().await?;
         let mut rx = tx_capt_clone.subscribe();
+        let clients_clone = clients.clone();
         tokio::spawn(async move {
+            {
+                let mut clients = clients_clone.lock().unwrap();
+                clients.insert(addr, "test".to_string());
+                println!("Client connected: {}", addr);
+                println!("Clients: {:?}", clients);
+            }
             loop {
-                println!("Spawned task for {:#?}", addr);
                 match rx.recv().await {
                     Ok(data) => {
-                        println!("Sending data {:#?} to {:#?}", data, addr);
-                        let _ = stream.write_all(&data).await;
+                        // TODO: Implement framing logic here
+                        // let _ = stream.write_all(&data).await;
+                        match stream.try_write(data.as_slice()) {
+                            Ok(_n) => {
+                            }
+                            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                                continue;
+                            }
+                            Err(e) => {
+                                println!("Error: {}", e);
+                                {
+                                    let mut clients = clients_clone.lock().unwrap();
+                                    clients.remove(&addr);
+                                    println!("Client disconnected: {}", addr);
+                                    println!("Clients: {:?}", clients);
+                                }
+                                break;
+                            }
+                        }
                     }
                     Err(err) => {
                         println!("Error: {}", err);

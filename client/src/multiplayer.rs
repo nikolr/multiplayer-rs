@@ -207,11 +207,9 @@ impl Multiplayer {
                     Task::none()
                 }
                 client_logic::Event::DataReceived(data) => {
-                    println!("Received Data Event");
                     let mut opus_decoder_buffer = [0f32; 960];
                     match self.opus_decoder.decode_float(&data, opus_decoder_buffer.as_mut_slice(), false) {
                         Ok(_result) => {
-                            println!("Decoded data samples per channel {:#?}", _result);
                             let samples_buffer = SamplesBuffer::new(2, 48000, opus_decoder_buffer);
                             self.sink.append(samples_buffer); 
                         }
