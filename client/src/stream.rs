@@ -2,13 +2,14 @@ use iced::futures;
 use iced::stream;
 use iced::widget::text;
 use std::fmt;
-
+use std::io::Cursor;
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::stream::Stream;
 use tokio::io;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use bytes::BytesMut;
 
 const HOST_PORT: u16 = 9475;
 
@@ -29,7 +30,7 @@ pub fn connect(addr: String, username: String) -> impl Stream<Item = Event> {
                                 .send(Event::Connected(Connection(sender)))
                                 .await;
 
-                            state = State::Connected(stream, receiver);
+                            state = State::Connected(MultiplayerConnection::new(stream));
                         }
                         Err(_) => {
                             println!("Failed to connect to multiplayer server");
@@ -38,14 +39,14 @@ pub fn connect(addr: String, username: String) -> impl Stream<Item = Event> {
                         }
                     }
                 }
-                State::Connected(stream, rx) => {
+                State::Connected(multiplayer_connection) => {
                     // First, send the username
                     // Wait for the socket to be writable
-                    stream.writable().await.unwrap();
+                    multiplayer_connection.stream.writable().await.unwrap();
 
                     // Try to write data, this may still fail with `WouldBlock`
                     // if the readiness event is a false positive.
-                    match stream.try_write(username.as_bytes()) {
+                    match multiplayer_connection.stream.try_write(username.as_bytes()) {
                         Ok(n) => {
                             println!("wrote username {} bytes", n);
                         }
@@ -56,38 +57,42 @@ pub fn connect(addr: String, username: String) -> impl Stream<Item = Event> {
                            println!("error: {}", e);
                         }
                     }
-                    
-                    loop {
-                        // Wait for the socket to be readable
-                        match stream.readable().await {
-                            Ok(_) => {
-                            }
-                            Err(e) => {
-                                println!("error: {}", e);
-                                let _ = output.send(Event::Disconnected).await;
-                                break;
-                            }
+
+                    // Wait for the socket to be readable
+                    match multiplayer_connection.stream.readable().await {
+                        Ok(_) => {
+                            println!("socket is readable");
                         }
-
-                        // Creating the buffer **after** the `await` prevents it from
-                        // being stored in the async task.
-                        let mut buf = [0; 80];
-
-                        // Try to read data, this may still fail with `WouldBlock`
-                        // if the readiness event is a false positive.
-                        match stream.try_read(&mut buf) {
-                            Ok(0) => {
-                                println!("connection closed");
-                                let _ = output.send(Event::Disconnected).await;
-                                state = State::Disconnected;
-                                break;
-                            },
+                        Err(e) => {
+                            println!("error: {}", e);
+                            let _ = output.send(Event::Disconnected).await;
+                            break;
+                        }
+                    }
+                    loop {
+                        match multiplayer_connection.stream.read_buf(&mut multiplayer_connection.buffer).await {
                             Ok(n) => {
-                                let _ = output.send(Event::DataReceived(buf)).await;
-                            }
-                            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                                continue;
-                            }
+                                if n == 0 {
+                                    // The remote closed the connection. For this to be
+                                    // a clean shutdown, there should be no data in the
+                                    // read buffer. If there is, this means that the
+                                    // peer closed the socket while sending a frame.
+                                    if multiplayer_connection.buffer.is_empty() {
+                                        println!("connection closed with empty buffer");
+                                        let _ = output.send(Event::Disconnected).await;
+                                        state = State::Disconnected;
+                                        break;
+                                    } else {
+                                        println!("connection reset by peer");
+                                        let _ = output.send(Event::Disconnected).await;
+                                        state = State::Disconnected;
+                                        break;
+                                    }
+                                }
+                                println!("read {} bytes", n);
+                                let _ = output.send(Event::DataReceived(multiplayer_connection.buffer.clone())).await;
+                                multiplayer_connection.buffer.clear();
+                            },
                             Err(e) => {
                                 println!("error: {}", e);
                                 let _ = output.send(Event::Disconnected).await;
@@ -105,17 +110,29 @@ pub fn connect(addr: String, username: String) -> impl Stream<Item = Event> {
 #[derive(Debug)]
 enum State {
     Disconnected,
-    Connected(
-        TcpStream,
-        mpsc::Receiver<Message>,
-    ),
+    Connected(MultiplayerConnection),
+}
+
+#[derive(Debug)]
+struct MultiplayerConnection {
+    stream: TcpStream,
+    buffer: BytesMut,
+}
+
+impl MultiplayerConnection {
+    fn new(stream: TcpStream) -> Self {
+        Self {
+            stream,
+            buffer: BytesMut::with_capacity(80),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub enum Event {
     Connected(Connection),
     Disconnected,
-    DataReceived([u8; 80]),
+    DataReceived(BytesMut),
 }
 
 #[derive(Debug, Clone)]

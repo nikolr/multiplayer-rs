@@ -55,7 +55,7 @@ impl Default for Multiplayer {
         let stream_handle = rodio::OutputStreamBuilder::open_default_stream()
             .expect("open default audio stream");
         let sink = rodio::Sink::connect_new(&stream_handle.mixer());
-        
+
         Self {
             username: String::from("Username"),
             server_address: String::from("192.168.0.31"),

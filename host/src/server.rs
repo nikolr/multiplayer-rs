@@ -91,7 +91,7 @@ pub async fn run(clients: Arc<Mutex<HashMap<SocketAddr, String>>>) -> io::Result
                                 continue;
                             }
                             Err(e) => {
-                                println!("Error: {}", e);
+                                println!("Error trying to write data as slice: {}", e);
                                 {
                                     let mut clients = clients_clone.lock().unwrap();
                                     clients.remove(&addr);
