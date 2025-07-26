@@ -542,7 +542,7 @@ impl Multiplayer {
         let connected_clients = Arc::clone(&self.connected_clients);
         let clients = connected_clients.lock().unwrap();
         let client_views = clients.iter().map(|client| {
-            Text::new(format!("{}", client.0))
+            Text::new(format!("{}", client.1))
                 .size(18)
                 .into()
         }).collect::<Vec<Element<Message>>>();

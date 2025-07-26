@@ -7,18 +7,21 @@ use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::stream::Stream;
 use tokio::io;
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
-pub fn connect() -> impl Stream<Item = Event> {
+const HOST_PORT: u16 = 9475;
+
+pub fn connect(addr: String, username: String) -> impl Stream<Item = Event> {
     stream::channel(100, |mut output| async move {
         let mut state = State::Disconnected;
+        println!("Attempt connecting to multiplayer server: {}", addr);
         loop {
             match &mut state {
                 State::Disconnected => {
-                    const MULTIPLAYER_SERVER: &str = "127.0.0.1:9475";
-                    println!("Connecting to multiplayer server: {}", MULTIPLAYER_SERVER);
+                    println!("Connecting to multiplayer server: {}", addr);
                     
-                    match TcpStream::connect(MULTIPLAYER_SERVER).await {
+                    match TcpStream::connect(format!("{addr}:{HOST_PORT}")).await {
                         Ok(stream) => {
                             let (sender, receiver) = mpsc::channel(100);
 
@@ -36,6 +39,24 @@ pub fn connect() -> impl Stream<Item = Event> {
                     }
                 }
                 State::Connected(stream, rx) => {
+                    // First, send the username
+                    // Wait for the socket to be writable
+                    stream.writable().await.unwrap();
+
+                    // Try to write data, this may still fail with `WouldBlock`
+                    // if the readiness event is a false positive.
+                    match stream.try_write(username.as_bytes()) {
+                        Ok(n) => {
+                            println!("wrote username {} bytes", n);
+                        }
+                        Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                            continue;
+                        }
+                        Err(e) => {
+                           println!("error: {}", e);
+                        }
+                    }
+                    
                     loop {
                         // Wait for the socket to be readable
                         match stream.readable().await {

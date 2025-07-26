@@ -16,6 +16,7 @@ pub struct Multiplayer {
     opus_decoder: opus::Decoder,
     output_stream: OutputStream,
     sink: rodio::Sink,
+    ready: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -50,17 +51,19 @@ pub enum HostMessage {
 impl Default for Multiplayer {
     fn default() -> Self {
 
+        let opus_decoder = opus::Decoder::new(48000, Stereo).unwrap();
         let stream_handle = rodio::OutputStreamBuilder::open_default_stream()
             .expect("open default audio stream");
         let sink = rodio::Sink::connect_new(&stream_handle.mixer());
-        let opus_decoder = opus::Decoder::new(48000, Stereo).unwrap();
+        
         Self {
             username: String::from("Username"),
             server_address: String::from("192.168.0.31"),
             state: State::Disconnected,
-            output_stream: stream_handle,
             opus_decoder,
-            sink
+            output_stream: stream_handle,
+            sink,
+            ready: false,
         }
     }
 }
@@ -68,7 +71,14 @@ impl Default for Multiplayer {
 impl Multiplayer {
 
     pub fn subscription(&self) -> Subscription<Message> {
-        Subscription::run(stream::connect).map(Message::Echo)
+        match self.ready {
+            true => {
+                Subscription::run_with_id("main" ,stream::connect(self.server_address.clone(), self.username.clone())).map(Message::Echo)
+            }
+            false => {
+                Subscription::none()
+            }
+        }
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message>{
@@ -88,11 +98,16 @@ impl Multiplayer {
                 Task::none()
             },
             Message::ConnectPressed => {
+                self.state = State::Connecting;
+                self.ready = true;
 
                 Task::none()
 
             },
             Message::DisconnectPressed => {
+                self.state = State::Disconnected;
+                self.ready = false;
+                self.sink.stop();
                 
                 Task::none()
             },
@@ -117,6 +132,8 @@ impl Multiplayer {
                 stream::Event::Disconnected => {
                     println!("Received Disconnected Event");
                     self.state = State::Disconnected;
+                    self.ready = false;
+                    self.sink.stop();
 
                     Task::none()
                 }
@@ -180,15 +197,26 @@ impl Multiplayer {
                                         .on_press(Message::ClearPressed),
                                 )
                                 .push(
-                                    Button::new(Text::new("Connect").align_x(Horizontal::Center))
+                                    Button::new(Text::new(
+                                        match self.state {
+                                            State::Connecting => "Cancel...",
+                                            State::Disconnected => "Connect",
+                                            State::Connected(_) => unreachable!(),
+                                        }
+                                    ).align_x(Horizontal::Center))
                                         .width(Length::Fill)
-                                        .on_press(Message::ConnectPressed),
-                                )
-                                .push(
-                                    Button::new(Text::new("TEST SEND").align_x(Horizontal::Center))
-                                        .width(Length::Fill)
-                                        .on_press(Message::Send(
-                                            stream::Message::new(&self.username.clone()).unwrap_or_else(|| stream::Message::new("test").unwrap()))
+                                        .on_press(
+                                            match self.state {
+                                                State::Connecting => {
+                                                    Message::DisconnectPressed
+                                                }
+                                                State::Disconnected => {
+                                                    Message::ConnectPressed
+                                                }
+                                                State::Connected(_) => {
+                                                    unreachable!()
+                                                }
+                                            }
                                         ),
                                 )
                         ),
