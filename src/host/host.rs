@@ -1,5 +1,4 @@
 use super::playlist::{Playlist, Track};
-use crate::host::server;
 use super::track::{MultiplayerPlaylist, MultiplayerPlaylistMessage, MultiplayerTrack, MultiplayerTrackMessage};
 
 use iced::alignment::Horizontal;
@@ -14,15 +13,10 @@ use rfd::FileHandle;
 use serde::{Deserialize, Serialize};
 use std::cmp::PartialEq;
 use std::collections::HashMap;
+use std::io;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use std::io;
-
-const HOST_PORT: u16 = 9475;
-const CAPTURE_CHUNK_SIZE: usize = 480;
-const BIT_RATE: i32 = 64000;
-const CHANNELS: u16 = 2;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -88,7 +82,7 @@ pub struct Host {
     fade_in_duration: u64,
     fade_out_duration: u64,
     audio_seek_dragged: bool,
-    connected_clients: Arc<Mutex<HashMap<SocketAddr, String>>>,
+    pub connected_clients: Arc<Mutex<HashMap<SocketAddr, String>>>,
 }
 
 impl Default for Host {
@@ -215,9 +209,7 @@ impl Host {
                 }
                 self.is_loading = false;
 
-                // TODO Remove this temporary testing server spawning
-                Task::perform(server::run(self.connected_clients.clone()), |_| Message::Server)
-                // Task::none()
+                Task::none()
             }
 
             Message::ExportPlaylist => {
@@ -255,7 +247,10 @@ impl Host {
                 }
             },
 
-            Message::PlaylistSavedToFile(_) => {
+            Message::PlaylistSavedToFile(result) => {
+                if let Err(e) = result {
+                    println!("Error saving playlist to file: {:#?}", e);
+                }
                 self.is_loading = false;
                 Task::none()
             }

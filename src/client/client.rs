@@ -1,7 +1,7 @@
 use crate::client::connection;
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{column, container, Button, Column, Container, Row, Text, TextInput};
-use iced::{Alignment, Element, Length, Subscription, Task};
+use iced::{Alignment, Element, Event, Length, Subscription, Task};
 use opus::Channels::Stereo;
 use rodio::buffer::SamplesBuffer;
 use rodio::OutputStream;
@@ -26,8 +26,8 @@ pub enum Message {
     ClearPressed,
     ConnectPressed,
     DisconnectPressed,
-    // TODO: Remove these and add a more descriptive one
-    Echo(connection::Event),
+    ConnectionEvent(connection::Event),
+    Event(Event),
     Send(connection::Message),
 }
 
@@ -35,17 +35,6 @@ enum State {
     Connecting,
     Disconnected,
     Connected(connection::Connection),
-}
-
-#[derive(Serialize, Deserialize)]
-pub enum ClientMessage {
-    AudioRequest(String),
-}
-
-#[derive(Serialize, Deserialize)]
-pub enum HostMessage {
-    CanStream(bool),
-    Chunk(Vec<u8>),
 }
 
 impl Default for Client {
@@ -77,10 +66,10 @@ impl Client {
     pub fn subscription(&self) -> Subscription<Message> {
         match self.ready {
             true => {
-                Subscription::run_with_id("main" ,connection::connect(self.server_address.clone(), self.username.clone())).map(Message::Echo)
+                Subscription::run_with_id("main" ,connection::connect(self.server_address.clone(), self.username.clone())).map(Message::ConnectionEvent)
             }
             false => {
-                Subscription::none()
+                iced::event::listen().map(Message::Event)
             }
         }
     }
@@ -126,7 +115,7 @@ impl Client {
                 State::Disconnected => Task::none(),
                 State::Connecting => Task::none(),
             },
-            Message::Echo(event) => match event {
+            Message::ConnectionEvent(event) => match event {
                 connection::Event::Connected(connection) => {
                     println!("Received Connected Event");
                     self.state = State::Connected(connection);
@@ -154,6 +143,20 @@ impl Client {
                     Task::none()
                 }
             },
+            Message::Event(event) => match event {
+                Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                                    key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Tab),
+                                    modifiers,
+                                    ..
+                                }) => {
+                    if modifiers.shift() {
+                        iced::widget::focus_previous()
+                    } else {
+                        iced::widget::focus_next()
+                    }
+                },
+                _ => Task::none(),
+            }
         }
     }
 

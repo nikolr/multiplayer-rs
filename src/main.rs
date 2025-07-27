@@ -58,13 +58,17 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 match message {
                     entry::entry::Message::StartHost => {
                         println!("Starting host");
-                        state.screen = Screen::Host(host::host::Host::new());
-                        Task::none()
+                        let host = host::host::Host::new();
+                        let connected_clients = host.connected_clients.clone();
+                        state.screen = Screen::Host(host);
+                        Task::perform(host::server::run(connected_clients), |_| host::host::Message::Server).map(Message::Host)
                     }
                     entry::entry::Message::StartClient => {
                         println!("Starting client");
                         state.screen = Screen::Client(client::client::Client::new());
-                        Task::none()
+                        Task::batch([
+                            iced::widget::focus_next()
+                        ])
                     }
                 }
             } else {
