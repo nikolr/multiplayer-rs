@@ -1,15 +1,14 @@
+use bytes::BytesMut;
+use futures::channel::mpsc;
+use futures::sink::SinkExt;
+use futures::stream::Stream;
 use iced::futures;
 use iced::stream;
 use iced::widget::text;
 use std::fmt;
-use std::io::Cursor;
-use futures::channel::mpsc;
-use futures::sink::SinkExt;
-use futures::stream::Stream;
 use tokio::io;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
-use bytes::BytesMut;
 
 const HOST_PORT: u16 = 9475;
 
@@ -89,7 +88,6 @@ pub fn connect(addr: String, username: String) -> impl Stream<Item = Event> {
                                         break;
                                     }
                                 }
-                                println!("read {} bytes", n);
                                 let _ = output.send(Event::DataReceived(multiplayer_connection.buffer.clone())).await;
                                 multiplayer_connection.buffer.clear();
                             },

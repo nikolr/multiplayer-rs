@@ -1,6 +1,7 @@
-use crate::playlist::{Playlist, Track};
-use crate::server;
-use crate::track::{MultiplayerPlaylist, MultiplayerPlaylistMessage, MultiplayerTrack, MultiplayerTrackMessage};
+use super::playlist::{Playlist, Track};
+use crate::host::server;
+use super::track::{MultiplayerPlaylist, MultiplayerPlaylistMessage, MultiplayerTrack, MultiplayerTrackMessage};
+
 use iced::alignment::Horizontal;
 use iced::widget::{button, center, column, container, row, slider, text, tooltip, vertical_space, Column, Container, Scrollable, Text};
 use iced::{Alignment, Element, Fill, FillPortion, Font, Subscription, Task};
@@ -73,7 +74,7 @@ pub enum Error {
     IoError(io::ErrorKind),
 }
 
-pub struct Multiplayer {
+pub struct Host {
     is_loading: bool,
     audio_manager: AudioManager,
     primary_track_handle: TrackHandle,
@@ -89,28 +90,9 @@ pub struct Multiplayer {
     audio_seek_dragged: bool,
     connected_clients: Arc<Mutex<HashMap<SocketAddr, String>>>,
 }
-impl Default for Multiplayer {
+
+impl Default for Host {
     fn default() -> Self {
-        // let gateway_ip = match reqwest::blocking::get("https://api.ipify.org") {
-        //     Ok(response) => {
-        //         let ip = response.text().unwrap();
-        //         ip
-        //     },
-        //     Err(err) => {
-        //         println!("Error getting gateway IP: {}", err);
-        //         String::from("127.0.0.1")
-        //     }
-        // };
-        //
-        // let ip = match local_ip_address::local_ip() {
-        //     Ok(ip_addr) => {
-        //         ip_addr.to_string()
-        //     }
-        //     Err(error) => {
-        //         println!("Error getting local IP: {}", error);
-        //         String::from("127.0.0.1")
-        //     }
-        // };
         let mut audio_manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default()).unwrap();
         let primary_tweener = audio_manager.add_modulator(
             TweenerBuilder {
@@ -160,7 +142,11 @@ impl Default for Multiplayer {
     }
 }
 
-impl Multiplayer {
+impl Host {
+    
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     fn get_unused_track_handle(&mut self) -> &mut TrackHandle {
         match self.used_track_handle {

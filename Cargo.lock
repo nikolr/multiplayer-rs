@@ -2264,27 +2264,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "multiplayer-client"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "iced",
- "opus",
- "rodio",
- "serde",
- "tokio",
-]
-
-[[package]]
-name = "multiplayer-host"
+name = "multiplayer"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "iced",
  "kira",
  "local-ip-address",
  "opus",
  "rfd",
+ "rodio",
  "serde",
  "serde_json",
  "sysinfo",

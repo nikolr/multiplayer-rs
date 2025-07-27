@@ -1,12 +1,12 @@
 use std::io::ErrorKind;
-use crate::multiplayer::{Error, Message};
-use crate::playlist::Track;
+use crate::host::playlist::Track;
 use iced::alignment::Horizontal;
 use iced::widget::{button, column, container, row, scrollable, slider, text, Column, Container};
 use iced::{Element, Fill};
 use iced::Length;
 use kira::sound::static_sound::StaticSoundData;
-use crate::multiplayer::Error::IoError;
+use crate::host::host::{Error, Message};
+use crate::host::host::Error::IoError;
 
 #[derive(Debug, Clone)]
 pub enum MultiplayerTrackMessage {

@@ -1,4 +1,4 @@
-use crate::stream;
+use crate::client::connection;
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{column, container, Button, Column, Container, Row, Text, TextInput};
 use iced::{Alignment, Element, Length, Subscription, Task};
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 const SERVER_PORT: u16 = 9475;
 
-pub struct Multiplayer {
+pub struct Client {
     username: String,
     server_address: String,
     state: State,
@@ -27,14 +27,14 @@ pub enum Message {
     ConnectPressed,
     DisconnectPressed,
     // TODO: Remove these and add a more descriptive one
-    Echo(stream::Event),
-    Send(stream::Message),
+    Echo(connection::Event),
+    Send(connection::Message),
 }
 
 enum State {
     Connecting,
     Disconnected,
-    Connected(stream::Connection),
+    Connected(connection::Connection),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -48,7 +48,7 @@ pub enum HostMessage {
     Chunk(Vec<u8>),
 }
 
-impl Default for Multiplayer {
+impl Default for Client {
     fn default() -> Self {
 
         let opus_decoder = opus::Decoder::new(48000, Stereo).unwrap();
@@ -68,12 +68,16 @@ impl Default for Multiplayer {
     }
 }
 
-impl Multiplayer {
+impl Client {
+    
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn subscription(&self) -> Subscription<Message> {
         match self.ready {
             true => {
-                Subscription::run_with_id("main" ,stream::connect(self.server_address.clone(), self.username.clone())).map(Message::Echo)
+                Subscription::run_with_id("main" ,connection::connect(self.server_address.clone(), self.username.clone())).map(Message::Echo)
             }
             false => {
                 Subscription::none()
@@ -123,13 +127,13 @@ impl Multiplayer {
                 State::Connecting => Task::none(),
             },
             Message::Echo(event) => match event {
-                stream::Event::Connected(connection) => {
+                connection::Event::Connected(connection) => {
                     println!("Received Connected Event");
                     self.state = State::Connected(connection);
 
                     Task::none()
                 }
-                stream::Event::Disconnected => {
+                connection::Event::Disconnected => {
                     println!("Received Disconnected Event");
                     self.state = State::Disconnected;
                     self.ready = false;
@@ -137,7 +141,7 @@ impl Multiplayer {
 
                     Task::none()
                 }
-                stream::Event::DataReceived(data) => {
+                connection::Event::DataReceived(data) => {
                     let mut opus_decoder_buffer = [0f32; 960];
                     match self.opus_decoder.decode_float(&data, opus_decoder_buffer.as_mut_slice(), false) {
                         Ok(_result) => {
