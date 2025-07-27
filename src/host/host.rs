@@ -103,7 +103,7 @@ impl Default for Host {
             mapping: Mapping {
                 input_range: (0.0, 1.0),
                 output_range: (Decibels::SILENCE, Decibels::IDENTITY),
-                easing: Easing::OutPowi(3),
+                easing: Easing::Linear,
             },
         });
         let secondary_builder = TrackBuilder::new().volume(Value::FromModulator {
@@ -111,7 +111,7 @@ impl Default for Host {
             mapping: Mapping {
                 input_range: (0.0, 1.0),
                 output_range: (Decibels::SILENCE, Decibels::IDENTITY),
-                easing: Easing::OutPowi(3),
+                easing: Easing::Linear,
             },
         });
         let primary_track = audio_manager.add_sub_track(primary_builder).unwrap();
@@ -305,7 +305,7 @@ impl Host {
                                         0.0,
                                         Tween {
                                             start_time: StartTime::Immediate,
-                                            duration: Duration::from_millis(self.fade_out_duration),
+                                            duration: Duration::from_millis(self.fade_out_duration * 2),
                                             easing: Easing::Linear,
                                         });
                                 }
@@ -314,7 +314,7 @@ impl Host {
                                         0.0,
                                         Tween {
                                             start_time: StartTime::Immediate,
-                                            duration: Duration::from_millis(self.fade_out_duration),
+                                            duration: Duration::from_millis(self.fade_out_duration * 2),
                                             easing: Easing::Linear,
                                         });
                                 }
@@ -324,8 +324,8 @@ impl Host {
                                         new_volume,
                                         Tween {
                                             start_time: StartTime::Immediate,
-                                            duration: Duration::from_millis(self.fade_in_duration),
-                                            easing: Easing::Linear,
+                                            duration: Duration::from_millis(self.fade_in_duration / 2),
+                                            easing: Easing::OutPowi(3),
                                         });
                                 }
                                 else {
@@ -333,8 +333,8 @@ impl Host {
                                         new_volume,
                                         Tween {
                                             start_time: StartTime::Immediate,
-                                            duration: Duration::from_millis(self.fade_in_duration),
-                                            easing: Easing::Linear,
+                                            duration: Duration::from_millis(self.fade_in_duration / 2),
+                                            easing: Easing::OutPowi(3),
                                         });
                                 }
                                 self.used_track_handle = if self.used_track_handle == UsedTrackHandle::Primary { UsedTrackHandle::Secondary } else { UsedTrackHandle::Primary };
