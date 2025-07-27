@@ -22,6 +22,7 @@ rustflags = ["-C", "target-cpu=native"]
 rodio = "0.21.0"
 opus = "0.3.0"
 iced = { version = "0.13.1", features = ["default", "tokio"] }
+iced_aw = { version = "0.12.2", default-features = false, features = ["tabs"] }
 serde = { version = "1.0.219", features = ["derive"] }
 tokio = { version = "1.46.1", features = ["full"] }
 bytes = "1.10.1"
