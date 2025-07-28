@@ -1,7 +1,9 @@
 use super::playlist::{Playlist, Track};
 use super::track::{MultiplayerPlaylist, MultiplayerPlaylistMessage, MultiplayerTrack, MultiplayerTrackMessage};
 
+use crate::{host, settings};
 use iced::alignment::Horizontal;
+use iced::task::Handle;
 use iced::widget::{button, center, column, container, row, slider, text, tooltip, vertical_space, Column, Container, Scrollable, Text};
 use iced::{Alignment, Element, Fill, FillPortion, Font, Subscription, Task};
 use kira::modulator::tweener::{TweenerBuilder, TweenerHandle};
@@ -9,14 +11,24 @@ use kira::sound::static_sound::StaticSoundHandle;
 use kira::sound::{PlaybackPosition, PlaybackState};
 use kira::track::{TrackBuilder, TrackHandle};
 use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Easing, Mapping, StartTime, Tween, Value};
+use opus::Bitrate;
+use opus::ErrorCode as OpusErrorCode;
 use rfd::FileHandle;
 use serde::{Deserialize, Serialize};
 use std::cmp::PartialEq;
-use std::collections::HashMap;
-use std::io;
+use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::Duration;
+use std::{error, io, thread};
+use sysinfo::{get_current_pid, Pid};
+use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
+
+const HOST_PORT: u16 = 9475;
+const CAPTURE_CHUNK_SIZE: usize = 480;
+const BIT_RATE: i32 = 64000;
+const CHANNELS: u16 = 2;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -37,23 +49,6 @@ pub enum Message {
     Resume,
     Stop,
     Server,
-}
-
-#[derive(Clone, Debug)]
-enum Signal {
-    SendChunk,
-}
-
-#[derive(Serialize, Deserialize)]
-pub enum ClientMessage {
-    AudioRequest(String),
-}
-
-#[derive(Serialize, Deserialize)]
-pub enum HostMessage {
-    //From receiver to sender
-    CanStream(bool),
-    Chunk(Vec<u8>),
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -79,14 +74,39 @@ pub struct Host {
     secondary_volume_tweener: TweenerHandle,
     playlist: MultiplayerPlaylist,
     playback_position: f64,
-    fade_in_duration: u64,
-    fade_out_duration: u64,
+    pub fade_in_duration: u64,
+    pub fade_out_duration: u64,
     audio_seek_dragged: bool,
     pub connected_clients: Arc<Mutex<HashMap<SocketAddr, String>>>,
+    pub task_handle: Option<Handle>,
+    pub capture_thread_handle: Option<JoinHandle<()>>,
+    pub rx_capt: Option<tokio::sync::broadcast::Receiver<Vec<u8>>>,
+    pub tx_cancel: Option<std::sync::mpsc::Sender<()>>,
 }
 
-impl Default for Host {
-    fn default() -> Self {
+
+
+impl Host {
+    
+    pub fn new(settings: settings::Settings) -> (Self, Task<Message>) {
+        let process_id = get_current_pid().unwrap();
+        let (tx_capt, rx_capt): (
+            tokio::sync::broadcast::Sender<Vec<u8>>,
+            tokio::sync::broadcast::Receiver<Vec<u8>>,
+        ) = tokio::sync::broadcast::channel(16);
+        let tx_capt_clone = tx_capt.clone();
+
+        let (tx_cancel, rx_cancel) = std::sync::mpsc::channel();
+
+        let handle = thread::Builder::new()
+            .name("Capture".to_string())
+            .spawn(move || {
+                let result = capture_loop(tx_capt, rx_cancel, CAPTURE_CHUNK_SIZE, process_id);
+                if let Err(_err) = result {
+                    println!("Capture thread exited with error: {}", _err);
+                }
+            });
+
         let mut audio_manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default()).unwrap();
         let primary_tweener = audio_manager.add_modulator(
             TweenerBuilder {
@@ -117,7 +137,11 @@ impl Default for Host {
         let primary_track = audio_manager.add_sub_track(primary_builder).unwrap();
         let secondary_track = audio_manager.add_sub_track(secondary_builder).unwrap();
 
-        Self {
+        let connected_clients = Arc::new(Mutex::new(HashMap::new()));
+
+        let (task, task_handle) = Task::perform(host::server::run(connected_clients.clone(), tx_capt_clone), |_| Message::Server).abortable();
+        
+        let host = Self {
             is_loading: false,
             audio_manager,
             primary_track_handle: primary_track,
@@ -128,18 +152,17 @@ impl Default for Host {
             secondary_volume_tweener: secondary_tweener,
             playlist: MultiplayerPlaylist::new(),
             playback_position: 0.0,
-            fade_in_duration: 600,
-            fade_out_duration: 600,
+            fade_in_duration: settings.fade_in_duration,
+            fade_out_duration: settings.fade_out_duration,
             audio_seek_dragged: false,
-            connected_clients: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
-}
+            connected_clients: connected_clients.clone(),
+            task_handle: Some(task_handle),
+            capture_thread_handle: handle.ok(),
+            rx_capt: Some(rx_capt),
+            tx_cancel: Some(tx_cancel),
+        };
 
-impl Host {
-    
-    pub fn new() -> Self {
-        Self::default()
+        (host, task)
     }
 
     fn get_unused_track_handle(&mut self) -> &mut TrackHandle {
@@ -433,11 +456,13 @@ impl Host {
             },
             Message::UpdateFadeInDurationSlider(fade_in) => {
                 self.fade_in_duration = fade_in as u64;
+                settings::save(&self).unwrap();
 
                 Task::none()
             },
             Message::UpdateFadeOutDurationSlider(fade_out) => {
                 self.fade_out_duration = fade_out as u64;
+                settings::save(&self).unwrap();
 
                 Task::none()
             },
@@ -524,7 +549,7 @@ impl Host {
         let clients = connected_clients.lock().unwrap();
         let client_views = clients.iter().map(|client| {
             Text::new(format!("{}", client.1))
-                .size(18)
+                .size(16)
                 .into()
         }).collect::<Vec<Element<Message>>>();
         let client_container = Scrollable::new(
@@ -552,15 +577,15 @@ impl Host {
                 fade_in_slider.align_y(Alignment::Start),
                 vertical_space(),
                 fade_out_slider.align_y(Alignment::End),
-            ].width(FillPortion(6)),
+            ].width(FillPortion(4)),
             text("Connected clients:")
                 .align_x(Horizontal::Left)
                 .width(FillPortion(2)),
-            client_container.width(FillPortion(3)),
+            client_container.width(FillPortion(2)),
         ]
             .height(84)
-            .padding(8)
-            .spacing(4);
+            .padding(4)
+            .spacing(2);
 
         let total_duration = match self.playlist.get_current_track() {
             Some(track) => track.data.duration(),
@@ -708,4 +733,136 @@ fn icon<'a, Message>(codepoint: char) -> Element<'a, Message> {
     const ICON_FONT: Font = Font::with_name("editor-icons");
 
     text(codepoint).font(ICON_FONT).into()
+}
+
+fn capture_loop(
+    tx_capt: tokio::sync::broadcast::Sender<Vec<u8>>,
+    rx_cancel: std::sync::mpsc::Receiver<()>,
+    chunksize: usize,
+    process_id: Pid,
+) -> Result<(), Box<dyn error::Error>> {
+    initialize_mta().ok().unwrap();
+
+    let desired_format = WaveFormat::new(32, 32, &SampleType::Float, 48000, 2, None);
+    let blockalign = desired_format.get_blockalign();
+    let autoconvert = true;
+    let include_tree = true;
+
+    let mut audio_client = AudioClient::new_application_loopback_client(process_id.as_u32(), include_tree)?;
+    let mode = StreamMode::EventsShared {
+        autoconvert,
+        buffer_duration_hns: 0,
+    };
+    audio_client.initialize_client(&desired_format, &Direction::Capture, &mode)?;
+
+    let h_event = audio_client.set_get_eventhandle().unwrap();
+
+    let capture_client = audio_client.get_audiocaptureclient().unwrap();
+
+    let mut sample_queue: VecDeque<u8> = VecDeque::new();
+
+    audio_client.start_stream().unwrap();
+
+    let mut opus_encoder = opus::Encoder::new(48000, opus::Channels::Stereo, opus::Application::Audio).unwrap();
+    opus_encoder.set_bitrate(Bitrate::Bits(BIT_RATE)).unwrap();
+    // let frame_size = (48000 / 1000 * 20) as usize;
+
+    loop {
+        if let Ok(_) = rx_cancel.try_recv() {
+            println!("Canceling capture loop");
+            audio_client.stop_stream().unwrap();
+            return Ok(());
+        }
+        while sample_queue.len() > (blockalign as usize * chunksize) {
+            let mut chunk = vec![0u8; blockalign as usize * chunksize];
+            for element in chunk.iter_mut() {
+                *element = sample_queue.pop_front().unwrap();
+            }
+            let opus_frame = SampleFormat::Float32.to_float_samples(chunk.as_mut_slice())?;
+            match opus_encoder.encode_vec_float(opus_frame.as_slice(), 80) {
+                Ok(buf) => {
+                    match tx_capt.send(buf) {
+                        Ok(_n) => {}
+                        Err(err) => {
+                            audio_client.stop_stream().unwrap();
+                            return Err(err.into());
+                        }
+                    }
+                }
+                Err(error) => {
+                    match error.code() {
+                        OpusErrorCode::BufferTooSmall => {
+                            println!("Buffer too small");
+                        }
+                        OpusErrorCode::BadArg => {
+                            println!("Bad arg");
+                        }
+                        OpusErrorCode::InternalError => {
+                            println!("Internal error");
+                        }
+                        OpusErrorCode::InvalidState => {
+                            println!("Invalid state");
+                        },
+                        _ => todo!(),
+                        
+                    }
+                    audio_client.stop_stream().unwrap();
+                    return Err(error.into());
+                }
+            };
+        }
+
+        let new_frames = capture_client.get_next_packet_size()?.unwrap_or(0);
+        let additional = (new_frames as usize * blockalign as usize)
+            .saturating_sub(sample_queue.capacity() - sample_queue.len());
+        sample_queue.reserve(additional);
+        if new_frames > 0 {
+            capture_client
+                .read_from_device_to_deque(&mut sample_queue)
+                .unwrap();
+        }
+        if h_event.wait_for_event(3000).is_err() {
+            audio_client.stop_stream().unwrap();
+            break;
+        }
+    }
+    Ok(())
+}
+
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum SampleFormat {
+    // Int16,
+    Float32
+}
+
+impl SampleFormat {
+    const fn bytes_per_sample(&self) -> usize {
+        match self {
+            // Self::Int16 => 2,
+            Self::Float32 => 4,
+        }
+    }
+
+    fn to_float_fn(&self) -> Box<dyn Fn(&[u8]) -> f32> {
+        let len = self.bytes_per_sample();
+        match self {
+            // Self::Int16 => Box::new(move |x: &[u8]| {
+            //     i16::from_le_bytes((&x[..len]).try_into().unwrap()) as f32 / i16::MAX as f32
+            // }),
+            Self::Float32 => Box::new(move |x: &[u8]| f32::from_le_bytes(x[..len].try_into().unwrap())),
+        }
+    }
+
+    fn to_float_samples(&self, samples: &[u8]) -> anyhow::Result<Vec<f32>> {
+        let len = self.bytes_per_sample();
+        if samples.len() % len != 0 {
+            anyhow::bail!("Invalid number of samples {}", samples.len());
+        }
+
+        let conversion = self.to_float_fn();
+
+        let samples = samples.chunks(len).map(conversion).collect();
+        Ok(samples)
+    }
 }
