@@ -1,8 +1,9 @@
 use super::playlist::{Playlist, Track};
 use super::track::{MultiplayerPlaylist, MultiplayerPlaylistMessage, MultiplayerTrack, MultiplayerTrackMessage};
 
-use opus::ErrorCode as OpusErrorCode;
+use crate::{host, settings};
 use iced::alignment::Horizontal;
+use iced::task::Handle;
 use iced::widget::{button, center, column, container, row, slider, text, tooltip, vertical_space, Column, Container, Scrollable, Text};
 use iced::{Alignment, Element, Fill, FillPortion, Font, Subscription, Task};
 use kira::modulator::tweener::{TweenerBuilder, TweenerHandle};
@@ -10,21 +11,19 @@ use kira::sound::static_sound::StaticSoundHandle;
 use kira::sound::{PlaybackPosition, PlaybackState};
 use kira::track::{TrackBuilder, TrackHandle};
 use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Easing, Mapping, StartTime, Tween, Value};
+use opus::Bitrate;
+use opus::ErrorCode as OpusErrorCode;
 use rfd::FileHandle;
 use serde::{Deserialize, Serialize};
 use std::cmp::PartialEq;
 use std::collections::{HashMap, VecDeque};
-use std::{error, io, thread};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
-use iced::task::Handle;
-use opus::Bitrate;
+use std::{error, io, thread};
 use sysinfo::{get_current_pid, Pid};
-use tokio::sync::oneshot::Receiver;
 use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
-use crate::host;
 
 const HOST_PORT: u16 = 9475;
 const CAPTURE_CHUNK_SIZE: usize = 480;
@@ -52,23 +51,6 @@ pub enum Message {
     Server,
 }
 
-#[derive(Clone, Debug)]
-enum Signal {
-    SendChunk,
-}
-
-#[derive(Serialize, Deserialize)]
-pub enum ClientMessage {
-    AudioRequest(String),
-}
-
-#[derive(Serialize, Deserialize)]
-pub enum HostMessage {
-    //From receiver to sender
-    CanStream(bool),
-    Chunk(Vec<u8>),
-}
-
 #[derive(PartialEq, Debug, Clone)]
 enum UsedTrackHandle {
     Primary,
@@ -92,8 +74,8 @@ pub struct Host {
     secondary_volume_tweener: TweenerHandle,
     playlist: MultiplayerPlaylist,
     playback_position: f64,
-    fade_in_duration: u64,
-    fade_out_duration: u64,
+    pub fade_in_duration: u64,
+    pub fade_out_duration: u64,
     audio_seek_dragged: bool,
     pub connected_clients: Arc<Mutex<HashMap<SocketAddr, String>>>,
     pub task_handle: Option<Handle>,
@@ -106,7 +88,7 @@ pub struct Host {
 
 impl Host {
     
-    pub fn new() -> (Self, Task<Message>) {
+    pub fn new(settings: settings::Settings) -> (Self, Task<Message>) {
         let process_id = get_current_pid().unwrap();
         let (tx_capt, rx_capt): (
             tokio::sync::broadcast::Sender<Vec<u8>>,
@@ -170,8 +152,8 @@ impl Host {
             secondary_volume_tweener: secondary_tweener,
             playlist: MultiplayerPlaylist::new(),
             playback_position: 0.0,
-            fade_in_duration: 600,
-            fade_out_duration: 600,
+            fade_in_duration: settings.fade_in_duration,
+            fade_out_duration: settings.fade_out_duration,
             audio_seek_dragged: false,
             connected_clients: connected_clients.clone(),
             task_handle: Some(task_handle),
@@ -474,11 +456,13 @@ impl Host {
             },
             Message::UpdateFadeInDurationSlider(fade_in) => {
                 self.fade_in_duration = fade_in as u64;
+                settings::save(&self).unwrap();
 
                 Task::none()
             },
             Message::UpdateFadeOutDurationSlider(fade_out) => {
                 self.fade_out_duration = fade_out as u64;
+                settings::save(&self).unwrap();
 
                 Task::none()
             },
@@ -594,14 +578,10 @@ impl Host {
                 vertical_space(),
                 fade_out_slider.align_y(Alignment::End),
             ].width(FillPortion(4)),
-            column![
-                button(Text::new("HOST")).on_press(Message::Server),
-                button(Text::new("JOIN")).on_press(Message::Server),
-            ].width(FillPortion(1)),
             text("Connected clients:")
                 .align_x(Horizontal::Left)
                 .width(FillPortion(2)),
-            client_container.width(FillPortion(3)),
+            client_container.width(FillPortion(2)),
         ]
             .height(84)
             .padding(4)
@@ -757,7 +737,7 @@ fn icon<'a, Message>(codepoint: char) -> Element<'a, Message> {
 
 fn capture_loop(
     tx_capt: tokio::sync::broadcast::Sender<Vec<u8>>,
-    mut rx_cancel: std::sync::mpsc::Receiver<()>,
+    rx_cancel: std::sync::mpsc::Receiver<()>,
     chunksize: usize,
     process_id: Pid,
 ) -> Result<(), Box<dyn error::Error>> {
@@ -787,8 +767,7 @@ fn capture_loop(
     opus_encoder.set_bitrate(Bitrate::Bits(BIT_RATE)).unwrap();
     // let frame_size = (48000 / 1000 * 20) as usize;
 
-    'outer: loop {
-        println!("Waiting for event...");
+    loop {
         if let Ok(_) = rx_cancel.try_recv() {
             println!("Canceling capture loop");
             audio_client.stop_stream().unwrap();
@@ -806,7 +785,7 @@ fn capture_loop(
                         Ok(_n) => {}
                         Err(err) => {
                             audio_client.stop_stream().unwrap();
-                            break 'outer;
+                            return Err(err.into());
                         }
                     }
                 }
@@ -824,8 +803,11 @@ fn capture_loop(
                         OpusErrorCode::InvalidState => {
                             println!("Invalid state");
                         },
-                        _ => todo!()
+                        _ => todo!(),
+                        
                     }
+                    audio_client.stop_stream().unwrap();
+                    return Err(error.into());
                 }
             };
         }
