@@ -10,6 +10,8 @@ use tokio::net::TcpStream;
 
 const HOST_PORT: u16 = 9475;
 
+// TODO: Is this subscription setup even necessary? Just try to recv from Steam messages api in the callback loop
+// Let Steam handle joining via the overlay
 pub fn connect(addr: String, username: String) -> impl Stream<Item = Event> {
     stream::channel(100, |mut output| async move {
         let mut state = State::Disconnected;

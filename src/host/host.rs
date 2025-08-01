@@ -49,6 +49,7 @@ pub enum Message {
     Resume,
     Stop,
     Server,
+    SteamLobby,
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -78,17 +79,14 @@ pub struct Host {
     pub fade_out_duration: u64,
     audio_seek_dragged: bool,
     pub connected_clients: Arc<Mutex<HashMap<SocketAddr, String>>>,
-    pub task_handle: Option<Handle>,
     pub capture_thread_handle: Option<JoinHandle<()>>,
     pub rx_capt: Option<tokio::sync::broadcast::Receiver<Vec<u8>>>,
     pub tx_cancel: Option<std::sync::mpsc::Sender<()>>,
 }
 
-
-
 impl Host {
     
-    pub fn new(settings: settings::Settings) -> (Self, Task<Message>) {
+    pub fn new(settings: settings::Settings) -> Self {
         let process_id = get_current_pid().unwrap();
         let (tx_capt, rx_capt): (
             tokio::sync::broadcast::Sender<Vec<u8>>,
@@ -139,9 +137,7 @@ impl Host {
 
         let connected_clients = Arc::new(Mutex::new(HashMap::new()));
 
-        let (task, task_handle) = Task::perform(host::server::run(connected_clients.clone(), tx_capt_clone), |_| Message::Server).abortable();
-        
-        let host = Self {
+        Self {
             is_loading: false,
             audio_manager,
             primary_track_handle: primary_track,
@@ -156,13 +152,10 @@ impl Host {
             fade_out_duration: settings.fade_out_duration,
             audio_seek_dragged: false,
             connected_clients: connected_clients.clone(),
-            task_handle: Some(task_handle),
             capture_thread_handle: handle.ok(),
             rx_capt: Some(rx_capt),
             tx_cancel: Some(tx_cancel),
-        };
-
-        (host, task)
+        }
     }
 
     fn get_unused_track_handle(&mut self) -> &mut TrackHandle {
@@ -508,6 +501,10 @@ impl Host {
                 Task::none()
             }
             Message::Server => {
+                Task::none()
+            },
+            Message::SteamLobby => {
+                
                 Task::none()
             }
         }

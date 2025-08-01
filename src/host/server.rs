@@ -1,15 +1,9 @@
-use opus::Bitrate;
-use opus::ErrorCode as OpusErrorCode;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use std::{error, thread};
-use sysinfo::{get_current_pid, Pid};
 use tokio::io;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
-use std::thread::JoinHandle;
-use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
 
 const HOST_PORT: u16 = 9475;
 const CAPTURE_CHUNK_SIZE: usize = 480;
@@ -37,6 +31,8 @@ pub async fn run(clients: Arc<Mutex<HashMap<SocketAddr, String>>>, tx_capt: toki
             String::from("127.0.0.1")
         }
     };
+    // TODO: Pass Steam Client (or messages if thats all thats needed). Loop through lobby members and send via packets via messages api
+    // No need to use broadcast? Just recv and clone for all members
     let listener = TcpListener::bind(format!("{ip}:{HOST_PORT}")).await?;
 
     let tx_capt_clone = tx_capt.clone();
