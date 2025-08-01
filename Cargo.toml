@@ -3,8 +3,36 @@ name = "multiplayer"
 version = "0.1.0"
 edition = "2024"
 
-[profile.dev.package."*"]
+[profile.dev.package.kira]
 opt-level = 3
+
+[profile.dev.package.cpal]
+opt-level = 3
+
+[profile.dev.package.symphonia]
+opt-level = 3
+
+[profile.dev.package.symphonia-bundle-mp3]
+opt-level = 3
+
+[profile.dev.package.symphonia-format-ogg]
+opt-level = 3
+
+[profile.dev.package.symphonia-codec-vorbis]
+opt-level = 3
+
+[profile.dev.package.symphonia-bundle-flac]
+opt-level = 3
+
+[profile.dev.package.symphonia-format-wav]
+opt-level = 3
+
+[profile.dev.package.symphonia-codec-pcm]
+opt-level = 3
+
+[profile.dev]
+opt-level = 3
+#debug = false
 
 [profile.release]
 lto = "fat"
@@ -12,7 +40,31 @@ codegen-units = 1
 panic = "abort"
 strip = "debuginfo"
 
-[profile.release."*"]
+[profile.release.package.kira]
+opt-level = 3
+
+[profile.release.package.cpal]
+opt-level = 3
+
+[profile.release.package.symphonia]
+opt-level = 3
+
+[profile.release.package.symphonia-bundle-mp3]
+opt-level = 3
+
+[profile.release.package.symphonia-format-ogg]
+opt-level = 3
+
+[profile.release.package.symphonia-codec-vorbis]
+opt-level = 3
+
+[profile.release.package.symphonia-bundle-flac]
+opt-level = 3
+
+[profile.release.package.symphonia-format-wav]
+opt-level = 3
+
+[profile.release.package.symphonia-codec-pcm]
 opt-level = 3
 
 [build]
@@ -34,3 +86,4 @@ kira = "0.10.8"
 anyhow = "1.0.98"
 local-ip-address = "0.6.5"
 confy = "1.0.0"
+steamworks = "0.12.1"
