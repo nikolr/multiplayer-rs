@@ -6,7 +6,7 @@ use iced::widget::{column, Column, Container, Row, Space, TextInput};
 use iced::{Alignment, Element, Font, Length, Subscription, Task, Theme};
 use iced_aw::{TabBarPosition, TabLabel, Tabs};
 use rodio::buffer::SamplesBuffer;
-use steamworks::{AppId, CallbackHandle, Client, FriendFlags, GameLobbyJoinRequested, GameRichPresenceJoinRequested, LobbyChatMsg, LobbyId, LobbyType, P2PSessionRequest, PersonaStateChange, SendType};
+use steamworks::{AppId, CallbackHandle, Client, FriendFlags, GameLobbyJoinRequested, GameRichPresenceJoinRequested, LobbyChatMsg, LobbyId, LobbyType, P2PSessionRequest, PersonaStateChange, SendType, SteamId};
 use steamworks::networking_messages::{NetworkingMessages, NetworkingMessagesSessionRequest};
 use steamworks::networking_types::{NetworkingIdentity, SendFlags};
 
@@ -312,9 +312,14 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 state.matchmaking.lobby_members(request.lobby_steam_id).iter().for_each(|steam_id| {
                     state.peers.push(*steam_id);   
                 });
-                state.networking.accept_p2p_session(request.friend_steam_id);
                 state.screen = Screen::Client(client::client::Client::new());
                 println!("Peers: {:?}", state.peers);
+                let _ = state.messages.send_message_to_user(
+                    NetworkingIdentity::new_steam_id(request.friend_steam_id),
+                    SendFlags::RELIABLE,
+                    format!("{} JOINED", state.client.friends().name()).as_bytes(),
+                    0,
+                );
             }
 
             if let Ok(request) = state.receiver_game_rich_presence_join_accept.try_recv() {
@@ -344,22 +349,19 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     //     println!("Got packet of size while host {}", size);
                     //     println!("Peers: {:?}", state.peers);
                     // }
-                    if state.peers.len() > 0 {
                         match host.rx_capt.try_recv() {
                             Ok(data) => {
-                                for peer in &state.peers {
-                                    let identity = NetworkingIdentity::new_steam_id(*peer);
+                                println!("Data: {:#?}", data);
+                                    let identity = NetworkingIdentity::new_steam_id(SteamId::from_raw(76561199883301606));
                                     let _ = state.messages.send_message_to_user(
                                         identity,
                                         SendFlags::RELIABLE,
                                         data.as_slice(),
                                         0,
                                     );
-                                }
                             }
                             Err(e) => println!("Error: {}", e),
                         }
-                    }
                 },
                 Screen::Client(client) => {
                     // while let Some(size) = state.networking.is_p2p_packet_available() {
