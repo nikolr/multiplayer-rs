@@ -45,7 +45,7 @@ struct State {
     lobby_id: Option<steamworks::LobbyId>,
     lobby_host_id: Option<steamworks::SteamId>,
     peers: Vec<steamworks::SteamId>,
-    // request_callback: CallbackHandle,
+    request_callback: CallbackHandle,
     game_lobby_join_requested_callback: CallbackHandle,
 }
 
@@ -92,10 +92,10 @@ impl Default for State {
         let (sender_game_rich_presence_join_accept, receiver_game_rich_presence_join_accept) = mpsc::channel();
 
         //YOU MUST KEEP CALLBACK IN VARIABLE OTHERWISE CALLBACK WILL NOT WORK
-        // let request_callback = client.register_callback(move |request: P2PSessionRequest| {
-        //     println!("ACCEPTED PEER");
-        //     sender_accept.send(request.remote).unwrap();
-        // });
+        let request_callback = client.register_callback(move |request: P2PSessionRequest| {
+            println!("ACCEPTED PEER");
+            sender_accept.send(request.remote).unwrap();
+        });
 
         let game_lobby_join_requested_callback = client.register_callback(move |request: GameLobbyJoinRequested| {
             println!("GOT LOBBY JOIN REQUEST");
@@ -128,7 +128,7 @@ impl Default for State {
                     lobby_id: None,
                     lobby_host_id: None,
                     peers: vec![],
-                    // request_callback,
+                    request_callback,
                     game_lobby_join_requested_callback,
                 }
             },
@@ -150,7 +150,7 @@ impl Default for State {
                     lobby_id: None,
                     lobby_host_id: None,
                     peers: vec![],
-                    // request_callback,
+                    request_callback,
                     game_lobby_join_requested_callback,
                 }
             }
@@ -279,6 +279,14 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             }
         },
         Message::SteamCallback => {
+            state.messages.session_request_callback(move |req| {
+                println!("Accepting session request from {:?}", req.remote());
+                req.accept();
+            });
+
+            state.messages.session_failed_callback(|info| {
+                eprintln!("Session failed: {info:#?}");
+            });
             // println!("Steam callback");
             state.client.run_callbacks();
 
@@ -296,21 +304,20 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 state.matchmaking.lobby_members(lobby).iter().for_each(|steam_id| {
                     state.peers.push(*steam_id);
                 });
-                state.screen = Screen::Client(client::client::Client::new());
                 println!("Peers: {:?}", state.peers);
-                let _ = state.messages.send_message_to_user(
-                    NetworkingIdentity::new_steam_id(host_id),
-                    SendFlags::RELIABLE,
-                    format!("{} JOINED", state.client.friends().name()).as_bytes(),
-                    0,
-                );
-                //When you connected to lobby you have to send a "ping" message to host
-                //After that host will add you into peer list
-                // state.networking.send_p2p_packet(
-                //     host_id,
-                //     SendType::Reliable,
+                // let _ = state.messages.send_message_to_user(
+                //     NetworkingIdentity::new_steam_id(host_id),
+                //     SendFlags::RELIABLE,
                 //     format!("{} JOINED", state.client.friends().name()).as_bytes(),
+                //     0,
                 // );
+                // When you connected to lobby you have to send a "ping" message to host
+                // After that host will add you into peer list
+                state.networking.send_p2p_packet(
+                    host_id,
+                    SendType::Reliable,
+                    format!("{} JOINED", state.client.friends().name()).as_bytes(),
+                );
             }
 
             if let Ok(request) = state.receiver_game_lobby_join_accept.try_recv() {
@@ -349,47 +356,64 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             
             match &mut state.screen {
                 Screen::Host(host) => {
-                    // while let Some(size) = state.networking.is_p2p_packet_available() {
-                    //     println!("Got packet of size while host {}", size);
-                    //     println!("Peers: {:?}", state.peers);
-                    // }
+                    if let Ok(user) = state.receiver_accept.try_recv() {
+                        println!("GET REQUEST FROM {}", user.raw());
+                        state.peers.push(user);
+                        state.networking.accept_p2p_session(user);
+                    }
                     if state.lobby_id.is_some() {
                         match host.rx_capt.try_recv() {
                             Ok(data) => {
-                                let identity = NetworkingIdentity::new_steam_id(SteamId::from_raw(76561199883301606));
-                                let _ = state.messages.send_message_to_user(
-                                    identity,
-                                    SendFlags::RELIABLE,
-                                    data.as_slice(),
-                                    0,
-                                );
+                                for peer in state.peers.iter() {
+                                    if state.lobby_host_id.is_some_and(|steam_id| *peer != steam_id) {
+                                        let _ = state.networking.send_p2p_packet(
+                                            *peer,
+                                            SendType::Reliable,
+                                            data.as_slice(),
+                                        );
+                                    }
+                                }
+                                // let identity = NetworkingIdentity::new_steam_id(SteamId::from_raw(76561199883301606));
+                                // let _ = state.messages.send_message_to_user(
+                                //     identity,
+                                //     SendFlags::RELIABLE,
+                                //     data.as_slice(),
+                                //     0,
+                                // );
                             }
                             Err(e) => println!("Error: {}", e),
                         }
                     }
                 },
                 Screen::Client(client) => {
-                    // while let Some(size) = state.networking.is_p2p_packet_available() {
-                    //     println!("Got packet of size while client {}", size);
-                    //     println!("Peers: {:?}", state.peers);
-                    // }
-                    for message in state.messages.receive_messages_on_channel(0, 1) {
-                        let peer = message.identity_peer();
-                        let data = message.data();
-                        let mut opus_decoder_buffer = [0f32; 960];
-                        match client.opus_decoder.decode_float(&data, opus_decoder_buffer.as_mut_slice(), false) {
-                            Ok(_result) => {
-                                let samples_buffer = SamplesBuffer::new(2, 48000, opus_decoder_buffer);
-                                client.sink.append(samples_buffer);
+                    while let Some(size) = state.networking.is_p2p_packet_available() {
+                        let mut empty_array = vec![0; size];
+                        let buffer = empty_array.as_mut_slice();
+                        if let Some((sender, n)) = state.networking.read_p2p_packet(buffer) {
+                            let mut opus_decoder_buffer = [0f32; 960];
+                            match client.opus_decoder.decode_float(&buffer, opus_decoder_buffer.as_mut_slice(), false) {
+                                Ok(_result) => {
+                                    let samples_buffer = SamplesBuffer::new(2, 48000, opus_decoder_buffer);
+                                    client.sink.append(samples_buffer);
+                                }
+                                Err(e) => println!("error: {}", e)
                             }
-                            Err(e) => println!("error: {}", e)
                         }
+                        // for message in state.messages.receive_messages_on_channel(0, 1) {
+                        //     let peer = message.identity_peer();
+                        //     let data = message.data();
+                        //     let mut opus_decoder_buffer = [0f32; 960];
+                        //     match client.opus_decoder.decode_float(&data, opus_decoder_buffer.as_mut_slice(), false) {
+                        //         Ok(_result) => {
+                        //             let samples_buffer = SamplesBuffer::new(2, 48000, opus_decoder_buffer);
+                        //             client.sink.append(samples_buffer);
+                        //         }
+                        //         Err(e) => println!("error: {}", e)
+                        //     }
+                        // }
                     }
-
-                },
+                }
             }
-            
-            
             Task::none()       
         },
         Message::LobbyJoinIdChanged(new_lobby_join_id) => {
