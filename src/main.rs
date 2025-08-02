@@ -66,14 +66,14 @@ impl Default for State {
         let networking = client.networking();
         let messages = client.networking_messages();
 
-        messages.session_request_callback(move |req| {
-            println!("Accepting session request from {:?}", req.remote());
-            req.accept();
-        });
-
-        messages.session_failed_callback(|info| {
-            eprintln!("Session failed: {info:#?}");
-        });
+        // messages.session_request_callback(move |req| {
+        //     println!("Accepting session request from {:?}", req.remote());
+        //     req.accept();
+        // });
+        // 
+        // messages.session_failed_callback(|info| {
+        //     eprintln!("Session failed: {info:#?}");
+        // });
 
         let friends = client.friends();
         println!("Friends");
@@ -279,14 +279,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             }
         },
         Message::SteamCallback => {
-            state.messages.session_request_callback(move |req| {
-                println!("Accepting session request from {:?}", req.remote());
-                req.accept();
-            });
-
-            state.messages.session_failed_callback(|info| {
-                eprintln!("Session failed: {info:#?}");
-            });
             // println!("Steam callback");
             state.client.run_callbacks();
 
@@ -364,15 +356,12 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     if state.lobby_id.is_some() {
                         match host.rx_capt.try_recv() {
                             Ok(data) => {
-                                for peer in state.peers.iter() {
-                                    if state.lobby_host_id.is_some_and(|steam_id| *peer != steam_id) {
+                                // println!("Got data from capture thread: {:?}", data);
                                         let _ = state.networking.send_p2p_packet(
-                                            *peer,
-                                            SendType::Reliable,
+                                            SteamId::from_raw(76561199883301606),
+                                            SendType::UnreliableNoDelay,
                                             data.as_slice(),
                                         );
-                                    }
-                                }
                                 // let identity = NetworkingIdentity::new_steam_id(SteamId::from_raw(76561199883301606));
                                 // let _ = state.messages.send_message_to_user(
                                 //     identity,
