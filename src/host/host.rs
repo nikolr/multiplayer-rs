@@ -80,7 +80,7 @@ pub struct Host {
     audio_seek_dragged: bool,
     pub connected_clients: Arc<Mutex<HashMap<SocketAddr, String>>>,
     pub capture_thread_handle: Option<JoinHandle<()>>,
-    pub rx_capt: tokio::sync::broadcast::Receiver<Vec<u8>>,
+    pub rx_capt: std::sync::mpsc::Receiver<Vec<u8>>,
     pub tx_cancel: Option<std::sync::mpsc::Sender<()>>,
 }
 
@@ -89,9 +89,9 @@ impl Host {
     pub fn new(settings: settings::Settings) -> Self {
         let process_id = get_current_pid().unwrap();
         let (tx_capt, rx_capt): (
-            tokio::sync::broadcast::Sender<Vec<u8>>,
-            tokio::sync::broadcast::Receiver<Vec<u8>>,
-        ) = tokio::sync::broadcast::channel(16);
+            std::sync::mpsc::Sender<Vec<u8>>,
+            std::sync::mpsc::Receiver<Vec<u8>>,
+        ) = std::sync::mpsc::channel();
         let tx_capt_clone = tx_capt.clone();
 
         let (tx_cancel, rx_cancel) = std::sync::mpsc::channel();
@@ -733,7 +733,7 @@ fn icon<'a, Message>(codepoint: char) -> Element<'a, Message> {
 }
 
 fn capture_loop(
-    tx_capt: tokio::sync::broadcast::Sender<Vec<u8>>,
+    tx_capt: std::sync::mpsc::Sender<Vec<u8>>,
     rx_cancel: std::sync::mpsc::Receiver<()>,
     chunksize: usize,
     process_id: Pid,
