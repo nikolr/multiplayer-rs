@@ -5,7 +5,7 @@ use std::time::Duration;
 use iced::widget::{column, Column, Container, Row, Space, TextInput};
 use iced::{Alignment, Element, Font, Length, Subscription, Task, Theme};
 use iced_aw::{TabBarPosition, TabLabel, Tabs};
-use steamworks::{AppId, CallbackHandle, Client, FriendFlags, GameLobbyJoinRequested, LobbyChatMsg, LobbyId, LobbyType, P2PSessionRequest, PersonaStateChange, SendType};
+use steamworks::{AppId, CallbackHandle, Client, FriendFlags, GameLobbyJoinRequested, GameRichPresenceJoinRequested, LobbyChatMsg, LobbyId, LobbyType, P2PSessionRequest, PersonaStateChange, SendType};
 
 mod client;
 mod host;
@@ -36,10 +36,12 @@ struct State {
     sender_join_lobby: std::sync::mpsc::Sender<steamworks::LobbyId>,
     receiver_accept: std::sync::mpsc::Receiver<steamworks::SteamId>,
     receiver_game_lobby_join_accept: std::sync::mpsc::Receiver<GameLobbyJoinRequested>,
+    receiver_game_rich_presence_join_accept: std::sync::mpsc::Receiver<GameRichPresenceJoinRequested>,
     lobby_join_id: String,
     lobby_id: Option<steamworks::LobbyId>,
     peers: Vec<steamworks::SteamId>,
     request_callback: CallbackHandle,
+    game_lobby_join_requested_callback: CallbackHandle,
 }
 
 impl Default for State {
@@ -52,7 +54,7 @@ impl Default for State {
         // let _cb = client.register_callback(|p: PersonaStateChange| {
         //     println!("Got callback: {:?}", p);
         // });
-        
+
         let cloned_client = client.clone();
 
         let matchmaking = client.matchmaking();
@@ -72,6 +74,7 @@ impl Default for State {
         let (sender_join_lobby, receiver_join_lobby) = mpsc::channel();
         let (sender_accept, receiver_accept) = mpsc::channel();
         let (sender_game_lobby_join_accept, receiver_game_lobby_join_accept) = mpsc::channel();
+        let (sender_game_rich_presence_join_accept, receiver_game_rich_presence_join_accept) = mpsc::channel();
 
         //YOU MUST KEEP CALLBACK IN VARIABLE OTHERWISE CALLBACK WILL NOT WORK
         let request_callback = client.register_callback(move |request: P2PSessionRequest| {
@@ -83,26 +86,33 @@ impl Default for State {
             println!("GOT LOBBY JOIN REQUEST");
             sender_game_lobby_join_accept.send(request).unwrap();
         });
+        
+        let game_rich_presence_join_requested_callback = client.register_callback(move |request: GameRichPresenceJoinRequested| {
+            println!("GOT GAME JOIN REQUEST");
+            sender_game_rich_presence_join_accept.send(request).unwrap();       
+        });
 
         let settings: settings::Settings = confy::load("multiplayer", None).unwrap_or_default();
         match settings.mode {
             settings::Mode::Host => {
                 let host = host::host::Host::new(settings);
-                State { 
+                State {
                     screen: Screen::Host(host),
                     client: cloned_client,
                     matchmaking,
                     networking,
                     receiver_create_lobby,
                     sender_create_lobby,
-                    receiver_join_lobby,   
+                    receiver_join_lobby,
                     sender_join_lobby,
                     receiver_accept,
-                    receiver_game_lobby_join_accept,   
-                    lobby_join_id: String::new(),  
+                    receiver_game_lobby_join_accept,
+                    receiver_game_rich_presence_join_accept,   
+                    lobby_join_id: String::new(),
                     lobby_id: None,
                     peers: vec![],
                     request_callback,
+                    game_lobby_join_requested_callback,   
                 }
             },
             settings::Mode::Client => {
@@ -113,14 +123,16 @@ impl Default for State {
                     networking,
                     receiver_create_lobby,
                     sender_create_lobby,
-                    receiver_join_lobby,   
+                    receiver_join_lobby,
                     sender_join_lobby,
                     receiver_accept,
-                    receiver_game_lobby_join_accept,  
-                    lobby_join_id: String::new(),   
+                    receiver_game_lobby_join_accept,
+                    receiver_game_rich_presence_join_accept,  
+                    lobby_join_id: String::new(),
                     lobby_id: None,
                     peers: vec![],
                     request_callback,
+                    game_lobby_join_requested_callback,  
                 }
             }
         }
@@ -162,7 +174,7 @@ fn subscription(state: &State) -> Subscription<Message> {
     match &state.screen {
         Screen::Client(client) => {
             Subscription::batch([
-                // client.subscription().map(Message::Client), 
+                // client.subscription().map(Message::Client),
                 iced::time::every(Duration::from_secs_f64(0.01)).map(|_| Message::SteamCallback)
             ])
         },
@@ -198,7 +210,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     let mut settings: settings::Settings = confy::load("multiplayer", None).unwrap_or_default();
                     settings.mode = settings::Mode::Host;
                     confy::store("multiplayer", None, &settings).unwrap();
-                    
+
                     // let host = host::host::Host::new(settings);
                     // state.screen = Screen::Host(host);
 
@@ -210,7 +222,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         }
                         Err(err) => panic!("Error: {}", err),
                     });
-                    
+
                     Task::none()
                 },
                 TabId::Client => {
@@ -243,7 +255,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                 println!("Ran into error while trying to join lobby: {:?}", e);
                             }
                         });
-                    
+
                     Task::none()
                 },
             }
@@ -272,9 +284,19 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     format!("{} JOINED", state.client.friends().name()).as_bytes(),
                 );
             }
-            
+
             if let Ok(request) = state.receiver_game_lobby_join_accept.try_recv() {
-                println!("Received game lobby join request: {:#?}", request);
+                println!("Received lobby join request: {:#?}", request);
+                state.peers.push(request.friend_steam_id);
+                state.networking.accept_p2p_session(request.friend_steam_id);
+                println!("Peers: {:?}", state.peers);
+
+                println!("Friend info: {:#?}", state.client.friends().request_user_information(request.friend_steam_id, true));
+                println!("{:#?}", state.matchmaking.lobby_members(state.lobby_id.unwrap()));
+            }
+
+            if let Ok(request) = state.receiver_game_rich_presence_join_accept.try_recv() {
+                println!("Received game join request: {:#?}", request);
                 state.peers.push(request.friend_steam_id);
                 state.networking.accept_p2p_session(request.friend_steam_id);
                 println!("Peers: {:?}", state.peers);
