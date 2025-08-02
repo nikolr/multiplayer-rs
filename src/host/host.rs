@@ -80,7 +80,7 @@ pub struct Host {
     audio_seek_dragged: bool,
     pub connected_clients: Arc<Mutex<HashMap<SocketAddr, String>>>,
     pub capture_thread_handle: Option<JoinHandle<()>>,
-    pub rx_capt: Option<tokio::sync::broadcast::Receiver<Vec<u8>>>,
+    pub rx_capt: tokio::sync::broadcast::Receiver<Vec<u8>>,
     pub tx_cancel: Option<std::sync::mpsc::Sender<()>>,
 }
 
@@ -153,7 +153,7 @@ impl Host {
             audio_seek_dragged: false,
             connected_clients: connected_clients.clone(),
             capture_thread_handle: handle.ok(),
-            rx_capt: Some(rx_capt),
+            rx_capt: rx_capt,
             tx_cancel: Some(tx_cancel),
         }
     }

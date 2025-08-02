@@ -5,7 +5,11 @@ use std::time::Duration;
 use iced::widget::{column, Column, Container, Row, Space, TextInput};
 use iced::{Alignment, Element, Font, Length, Subscription, Task, Theme};
 use iced_aw::{TabBarPosition, TabLabel, Tabs};
+use rodio::buffer::SamplesBuffer;
 use steamworks::{AppId, CallbackHandle, Client, FriendFlags, GameLobbyJoinRequested, GameRichPresenceJoinRequested, LobbyChatMsg, LobbyId, LobbyType, P2PSessionRequest, PersonaStateChange, SendType};
+use steamworks::networking_messages::NetworkingMessages;
+use steamworks::networking_types::{NetworkingIdentity, SendFlags};
+use tokio::sync::broadcast::error::TryRecvError;
 
 mod client;
 mod host;
@@ -30,6 +34,7 @@ struct State {
     client: Client,
     matchmaking: steamworks::Matchmaking,
     networking: steamworks::Networking,
+    messages: NetworkingMessages,
     receiver_create_lobby: std::sync::mpsc::Receiver<steamworks::LobbyId>,
     sender_create_lobby: std::sync::mpsc::Sender<steamworks::LobbyId>,
     receiver_join_lobby: std::sync::mpsc::Receiver<steamworks::LobbyId>,
@@ -59,6 +64,16 @@ impl Default for State {
 
         let matchmaking = client.matchmaking();
         let networking = client.networking();
+        let messages = client.networking_messages();
+
+        messages.session_request_callback(move |req| {
+            println!("Accepting session request from {:?}", req.remote());
+            assert!(req.accept());
+        });
+        
+        messages.session_failed_callback(|info| {
+            eprintln!("Session failed: {info:#?}");
+        });
 
         let friends = client.friends();
         println!("Friends");
@@ -86,10 +101,10 @@ impl Default for State {
             println!("GOT LOBBY JOIN REQUEST");
             sender_game_lobby_join_accept.send(request).unwrap();
         });
-        
+
         let game_rich_presence_join_requested_callback = client.register_callback(move |request: GameRichPresenceJoinRequested| {
             println!("GOT GAME JOIN REQUEST");
-            sender_game_rich_presence_join_accept.send(request).unwrap();       
+            sender_game_rich_presence_join_accept.send(request).unwrap();
         });
 
         let settings: settings::Settings = confy::load("multiplayer", None).unwrap_or_default();
@@ -101,18 +116,19 @@ impl Default for State {
                     client: cloned_client,
                     matchmaking,
                     networking,
+                    messages,
                     receiver_create_lobby,
                     sender_create_lobby,
                     receiver_join_lobby,
                     sender_join_lobby,
                     receiver_accept,
                     receiver_game_lobby_join_accept,
-                    receiver_game_rich_presence_join_accept,   
+                    receiver_game_rich_presence_join_accept,
                     lobby_join_id: String::new(),
                     lobby_id: None,
                     peers: vec![],
                     request_callback,
-                    game_lobby_join_requested_callback,   
+                    game_lobby_join_requested_callback,
                 }
             },
             settings::Mode::Client => {
@@ -121,18 +137,19 @@ impl Default for State {
                     client: cloned_client,
                     matchmaking,
                     networking,
+                    messages,
                     receiver_create_lobby,
                     sender_create_lobby,
                     receiver_join_lobby,
                     sender_join_lobby,
                     receiver_accept,
                     receiver_game_lobby_join_accept,
-                    receiver_game_rich_presence_join_accept,  
+                    receiver_game_rich_presence_join_accept,
                     lobby_join_id: String::new(),
                     lobby_id: None,
                     peers: vec![],
                     request_callback,
-                    game_lobby_join_requested_callback,  
+                    game_lobby_join_requested_callback,
                 }
             }
         }
@@ -235,7 +252,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                 println!("Joining capture thread");
                                 let cancel = host.tx_cancel.take();
                                 cancel.unwrap().send(()).unwrap();
-                                host.rx_capt.take();
                                 capture_thread_handle.join().unwrap();
                             }
                             None => {
@@ -266,7 +282,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
 
             if let Ok(lobby) = state.receiver_create_lobby.try_recv() {
                 println!("CREATED LOBBY WITH ID: {}", lobby.raw());
-                state.peers.push(state.client.user().steam_id());
                 state.lobby_id = Some(lobby);
             }
 
@@ -287,12 +302,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
 
             if let Ok(request) = state.receiver_game_lobby_join_accept.try_recv() {
                 println!("Received lobby join request: {:#?}", request);
-                state.peers.push(request.friend_steam_id);
+                state.matchmaking.lobby_members(request.lobby_steam_id).iter().for_each(|steam_id| {
+                    state.peers.push(*steam_id);   
+                });
                 state.networking.accept_p2p_session(request.friend_steam_id);
+                state.screen = Screen::Client(client::client::Client::new());
                 println!("Peers: {:?}", state.peers);
-
                 println!("Friend info: {:#?}", state.client.friends().request_user_information(request.friend_steam_id, true));
-                println!("{:#?}", state.matchmaking.lobby_members(state.lobby_id.unwrap()));
             }
 
             if let Ok(request) = state.receiver_game_rich_presence_join_accept.try_recv() {
@@ -302,7 +318,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 println!("Peers: {:?}", state.peers);
 
                 println!("Friend info: {:#?}", state.client.friends().request_user_information(request.friend_steam_id, true));
-                println!("{:#?}", state.matchmaking.lobby_members(state.lobby_id.unwrap()));
             }
 
             if let Ok(user) = state.receiver_accept.try_recv() {
@@ -318,20 +333,49 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 println!("{:#?}", state.matchmaking.lobby_members(state.lobby_id.unwrap()));
             }
             
-            // match &mut state.screen {
-            //     Screen::Host(host) => {
-            //         while let Some(size) = state.networking.is_p2p_packet_available() {
-            //             println!("Got packet of size while host {}", size);
-            //             println!("Peers: {:?}", state.peers);
-            //         } 
-            //     },
-            //     Screen::Client(client) => {
-            //         while let Some(size) = state.networking.is_p2p_packet_available() {
-            //             println!("Got packet of size while client {}", size);
-            //             println!("Peers: {:?}", state.peers);
-            //         }
-            //     },
-            // }
+            match &mut state.screen {
+                Screen::Host(host) => {
+                    // while let Some(size) = state.networking.is_p2p_packet_available() {
+                    //     println!("Got packet of size while host {}", size);
+                    //     println!("Peers: {:?}", state.peers);
+                    // }
+                    if state.peers.len() > 0 {
+                        match host.rx_capt.try_recv() {
+                            Ok(data) => {
+                                for peer in &state.peers {
+                                    let identity = NetworkingIdentity::new_steam_id(*peer);
+                                    let _ = state.messages.send_message_to_user(
+                                        identity,
+                                        SendFlags::UNRELIABLE_NO_DELAY,
+                                        data.as_slice(),
+                                        0,
+                                    );
+                                }
+                            }
+                            Err(_) => {}
+                        }
+                    }
+                },
+                Screen::Client(client) => {
+                    // while let Some(size) = state.networking.is_p2p_packet_available() {
+                    //     println!("Got packet of size while client {}", size);
+                    //     println!("Peers: {:?}", state.peers);
+                    // }
+                    for message in state.messages.receive_messages_on_channel(0, 100) {
+                        let peer = message.identity_peer();
+                        let data = message.data();
+                        let mut opus_decoder_buffer = [0f32; 960];
+                        match client.opus_decoder.decode_float(&data, opus_decoder_buffer.as_mut_slice(), false) {
+                            Ok(_result) => {
+                                let samples_buffer = SamplesBuffer::new(2, 48000, opus_decoder_buffer);
+                                client.sink.append(samples_buffer);
+                            }
+                            Err(e) => println!("error: {}", e)
+                        }
+                    }
+                    
+                },
+            }
             
             
             Task::none()       

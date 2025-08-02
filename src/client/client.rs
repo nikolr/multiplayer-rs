@@ -13,9 +13,9 @@ pub struct Client {
     username: String,
     server_address: String,
     state: State,
-    opus_decoder: opus::Decoder,
+    pub(crate) opus_decoder: opus::Decoder,
     output_stream: OutputStream,
-    sink: rodio::Sink,
+    pub(crate) sink: rodio::Sink,
     ready: bool,
 }
 
