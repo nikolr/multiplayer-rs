@@ -70,7 +70,7 @@ impl Default for State {
             println!("Accepting session request from {:?}", req.remote());
             req.accept();
         });
-        
+
         messages.session_failed_callback(|info| {
             eprintln!("Session failed: {info:#?}");
         });
@@ -298,12 +298,12 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 });
                 state.screen = Screen::Client(client::client::Client::new());
                 println!("Peers: {:?}", state.peers);
-                // let _ = state.messages.send_message_to_user(
-                //     NetworkingIdentity::new_steam_id(request.friend_steam_id),
-                //     SendFlags::RELIABLE,
-                //     format!("{} JOINED", state.client.friends().name()).as_bytes(),
-                //     0,
-                // );
+                let _ = state.messages.send_message_to_user(
+                    NetworkingIdentity::new_steam_id(host_id),
+                    SendFlags::RELIABLE,
+                    format!("{} JOINED", state.client.friends().name()).as_bytes(),
+                    0,
+                );
                 //When you connected to lobby you have to send a "ping" message to host
                 //After that host will add you into peer list
                 // state.networking.send_p2p_packet(
@@ -385,7 +385,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             Err(e) => println!("error: {}", e)
                         }
                     }
-                    
+
                 },
             }
             
