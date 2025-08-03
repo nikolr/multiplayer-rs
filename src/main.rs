@@ -399,6 +399,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             Task::none()       
         },
         Message::DisconnectPressed => {
+            if let Screen::Client(client) = &mut state.screen {
+                client.net_connection.take();
+                client.sink.stop();
+            }
             let mut settings: settings::Settings = confy::load("multiplayer", None).unwrap_or_default();
             settings.mode = settings::Mode::Host;
             confy::store("multiplayer", None, &settings).unwrap();
@@ -451,7 +455,7 @@ fn view(state: &State) -> Element<Message> {
         Screen::Client(client) => {
             column![
                 tab_bar,
-                client.view().map(Message::Client)
+                client_view,
             ].into()
         },
     }
