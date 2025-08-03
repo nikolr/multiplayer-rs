@@ -6,6 +6,7 @@ use rodio::buffer::SamplesBuffer;
 use rodio::OutputStream;
 use serde::{Deserialize, Serialize};
 use steamworks::networking_sockets::NetConnection;
+use steamworks::networking_types::NetworkingConnectionState;
 
 const SERVER_PORT: u16 = 9475;
 
@@ -15,7 +16,7 @@ pub struct Client {
     output_stream: OutputStream,
     pub(crate) sink: rodio::Sink,
     pub(crate) net_connection: Option<NetConnection>,
-}
+}   
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -31,6 +32,8 @@ impl Default for Client {
             .expect("open default audio stream");
         let sink = rodio::Sink::connect_new(&stream_handle.mixer());
 
+        // let (closed_by_peer_tx, closed_by_peer_rx) = std::sync::mpsc::channel();
+        
         Self {
             opus_decoder,
             opus_decoder_buffer,
@@ -42,37 +45,10 @@ impl Default for Client {
 }
 
 impl Client {
-    
     pub fn new(net_connection: Option<NetConnection>) -> Self {
         let mut client = Self::default();
         client.net_connection = net_connection;
-        client   
+        client
         
-    }
-    pub fn update(&mut self, message: Message) -> Task<Message>{
-        match message {
-            Message::DisconnectPressed => {
-                self.net_connection.take();
-                self.sink.stop();
-                
-                Task::none()
-            },
-        }
-    }
-
-    pub fn view(&self) -> Element<Message> {
-        container(
-            column![
-                Container::new(Text::new("Connected").center().align_x(Horizontal::Center)),
-                Button::new(Text::new("Disconnect").center().align_x(Horizontal::Center))
-                    .on_press(Message::DisconnectPressed),
-            ]
-        )
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .align_x(Horizontal::Center)
-            .align_y(Vertical::Center)
-            .into()
-            
     }
 }

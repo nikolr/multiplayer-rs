@@ -11,7 +11,7 @@ use rodio::buffer::SamplesBuffer;
 use steamworks::{AppId, CallbackHandle, CallbackResult, Client, FriendFlags, GameLobbyJoinRequested, GameRichPresenceJoinRequested, LobbyChatMsg, LobbyId, LobbyType, P2PSessionRequest, PersonaStateChange, SendType, SteamId};
 use steamworks::networking_messages::{NetworkingMessages, NetworkingMessagesSessionRequest, SessionRequest};
 use steamworks::networking_sockets::{NetConnection, NetworkingSockets};
-use steamworks::networking_types::{ListenSocketEvent, NetworkingConfigEntry, NetworkingIdentity, NetworkingMessage, SendFlags};
+use steamworks::networking_types::{ListenSocketEvent, NetworkingConfigEntry, NetworkingConnectionState, NetworkingIdentity, NetworkingMessage, SendFlags};
 
 mod client;
 mod host;
@@ -230,7 +230,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         },
         Message::Client(message) => {
             if let Screen::Client(client) = &mut state.screen {
-                client.update(message).map(Message::Client)
+                // client.update(message).map(Message::Client)
+                Task::none()
             } else {
                 Task::none()
             }
@@ -307,7 +308,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         println!("Error: {:?}", result);
                     }
                 });
-
             }
             
             // TODO: Switch to using steamworks::NetworkingSockets
@@ -376,7 +376,32 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 Screen::Client(client) => {
                     if let Some(net_connection) = &mut client.net_connection {
                         let connection_info = state.sockets.get_connection_info(net_connection);
-                        println!("Connection info: {:?}", connection_info);
+                        match connection_info {
+                            Ok(connection_info) => match connection_info.state() {
+                                Ok(networking_connection_state) => match networking_connection_state {
+                                    NetworkingConnectionState::None => {}
+                                    NetworkingConnectionState::Connecting => {}
+                                    NetworkingConnectionState::FindingRoute => {}
+                                    NetworkingConnectionState::Connected => {}
+                                    NetworkingConnectionState::ClosedByPeer => {
+                                        client.net_connection.take();
+                                        client.sink.stop();
+                                        let mut settings: settings::Settings = confy::load("multiplayer", None).unwrap_or_default();
+                                        settings.mode = settings::Mode::Host;
+                                        confy::store("multiplayer", None, &settings).unwrap();
+                                        let host = host::host::Host::new(settings);
+                                        state.screen = Screen::Host(host);
+                                        return Task::none();
+                                    }
+                                    NetworkingConnectionState::ProblemDetectedLocally => {}
+                                } Err(invalid_connection_state) => {
+                                    println!("Invalid connection state: {:?}", invalid_connection_state);
+                                },
+                            },
+                            Err(b) => {
+                                println!("Error retrieving connection info: {:?}", b);
+                            }
+                        }
                         match net_connection.receive_messages(100) {
                             Ok(messages) => {
                                 for message in messages {
@@ -396,7 +421,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                 println!("Invalid handle error: {:?}", invalid_handle_error);
                             },
                         }
-
                     }
                 }
             }
