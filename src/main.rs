@@ -305,11 +305,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 );
                 // When you connected to lobby you have to send a "ping" message to host
                 // After that host will add you into peer list
-                // state.networking.send_p2p_packet(
-                //     host_id,
-                //     SendType::Reliable,
-                //     format!("{} JOINED", state.client.friends().name()).as_bytes(),
-                // );
+                state.networking.send_p2p_packet(
+                    host_id,
+                    SendType::Reliable,
+                    format!("{} JOINED", state.client.friends().name()).as_bytes(),
+                );
             }
 
             if let Ok(request) = state.receiver_game_lobby_join_accept.try_recv() {
@@ -327,10 +327,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
 
             // if let Ok(user) = state.receiver_accept.try_recv() {
             //     println!("GET REQUEST FROM {}", user.raw());
-            //     // if let Screen::Host(host) = &mut state.screen {
-            //     //     println!("Here I can Add it to host struct peer list");
-            //     //     state.peers.push(user);
-            //     // }
             //     state.peers.push(user);
             //     state.networking.accept_p2p_session(user);
             //     println!("Peers: {:?}", state.peers);
@@ -341,11 +337,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             
             match &mut state.screen {
                 Screen::Host(host) => {
-                    // if let Ok(user) = state.receiver_accept.try_recv() {
-                    //     println!("GET REQUEST FROM {}", user.raw());
-                    //     state.peers.push(user);
-                    //     state.networking.accept_p2p_session(user);
-                    // }
+                    if let Ok(user) = state.receiver_accept.try_recv() {
+                        println!("GET REQUEST FROM {}", user.raw());
+                        state.peers.push(user);
+                        state.networking.accept_p2p_session(user);
+                    }
                     if state.lobby_id.is_some() {
                         match host.rx_capt.try_recv() {
                             Ok(data) => {
@@ -355,13 +351,16 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             //             SendType::UnreliableNoDelay,
                             //             data.as_slice(),
                             //         );
-                                let identity = NetworkingIdentity::new_steam_id(SteamId::from_raw(76561199883301606));
-                                let _ = state.messages.send_message_to_user(
-                                    identity,
-                                    SendFlags::UNRELIABLE,
-                                    data.as_slice(),
-                                    0,
-                                );
+                                for peer in &state.matchmaking.lobby_members(state.lobby_id.unwrap()) {
+                                    // let identity = NetworkingIdentity::new_steam_id(SteamId::from_raw(76561199883301606));
+                                    let identity = NetworkingIdentity::new_steam_id(*peer);
+                                    let _ = state.messages.send_message_to_user(
+                                        identity,
+                                        SendFlags::UNRELIABLE_NO_DELAY,
+                                        data.as_slice(),
+                                        0,
+                                    );
+                                }
                             }
                             Err(e) => println!("Error: {}", e),
                         }
@@ -381,7 +380,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     //             Err(e) => println!("error: {}", e)
                     //         }
                     //     }
-                    for message in state.messages.receive_messages_on_channel(0, 1) {
+                    for message in state.messages.receive_messages_on_channel(0, 100) {
                         let peer = message.identity_peer();
                         let data = message.data();
                         let mut opus_decoder_buffer = [0f32; 960];
