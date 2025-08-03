@@ -239,6 +239,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             println!("Tab selected: {:?}", tab_id);
             match tab_id {
                 TabId::Host => {
+                    if let Screen::Host(host) = &mut state.screen {
+                        if host.listen_socket.is_some() {
+                            return Task::none();
+                        }
+                    }
                     let mut settings: settings::Settings = confy::load("multiplayer", None).unwrap_or_default();
                     settings.mode = settings::Mode::Host;
                     confy::store("multiplayer", None, &settings).unwrap();
@@ -445,6 +450,11 @@ fn view(state: &State) -> Element<Message> {
     
     match &state.screen {
         Screen::Host(host) => {
+            if host.listen_socket.is_some() { 
+                return column![
+                    host.view().map(Message::Host)
+            ].into();
+            }
             column![
                 tab_bar,
                 host.view().map(Message::Host)
