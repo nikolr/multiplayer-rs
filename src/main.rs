@@ -300,6 +300,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
 
             if let Ok(request) = state.receiver_game_lobby_join_accept.try_recv() {
                 println!("Received lobby join request: {:#?}", request);
+                if let Some(lobby_id) = state.lobby_id {
+                    println!("Leaving lobby before trying to join new one: {}", lobby_id.raw());
+                    state.matchmaking.leave_lobby(lobby_id);
+                }
                 let sender_join_lobby_clone = state.sender_join_lobby.clone();
                 state.matchmaking.join_lobby(request.lobby_steam_id, move |result| {
                     if let Ok(lobby) = result {
@@ -390,6 +394,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                         settings.mode = settings::Mode::Host;
                                         confy::store("multiplayer", None, &settings).unwrap();
                                         let host = host::host::Host::new(settings);
+                                        state.lobby_id = None;
                                         state.screen = Screen::Host(host);
                                         return Task::none();
                                     }
@@ -436,6 +441,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             settings.mode = settings::Mode::Host;
             confy::store("multiplayer", None, &settings).unwrap();
             let host = host::host::Host::new(settings);
+            state.lobby_id = None;
             state.screen = Screen::Host(host);
             
             Task::none()       
