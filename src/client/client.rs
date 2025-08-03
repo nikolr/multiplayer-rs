@@ -14,6 +14,7 @@ pub struct Client {
     server_address: String,
     state: State,
     pub(crate) opus_decoder: opus::Decoder,
+    pub(crate) opus_decoder_buffer: [f32; 960],
     output_stream: OutputStream,
     pub(crate) sink: rodio::Sink,
     ready: bool,
@@ -41,6 +42,7 @@ impl Default for Client {
     fn default() -> Self {
 
         let opus_decoder = opus::Decoder::new(48000, Stereo).unwrap();
+        let opus_decoder_buffer = [0f32; 960];
         let stream_handle = rodio::OutputStreamBuilder::open_default_stream()
             .expect("open default audio stream");
         let sink = rodio::Sink::connect_new(&stream_handle.mixer());
@@ -50,6 +52,7 @@ impl Default for Client {
             server_address: String::from("192.168.0.31"),
             state: State::Disconnected,
             opus_decoder,
+            opus_decoder_buffer,
             output_stream: stream_handle,
             sink,
             ready: false,

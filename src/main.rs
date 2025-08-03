@@ -6,8 +6,8 @@ use iced::widget::{column, Column, Container, Row, Space, TextInput};
 use iced::{Alignment, Element, Font, Length, Subscription, Task, Theme};
 use iced_aw::{TabBarPosition, TabLabel, Tabs};
 use rodio::buffer::SamplesBuffer;
-use steamworks::{AppId, CallbackHandle, Client, FriendFlags, GameLobbyJoinRequested, GameRichPresenceJoinRequested, LobbyChatMsg, LobbyId, LobbyType, P2PSessionRequest, PersonaStateChange, SendType, SteamId};
-use steamworks::networking_messages::{NetworkingMessages, NetworkingMessagesSessionRequest};
+use steamworks::{AppId, CallbackHandle, CallbackResult, Client, FriendFlags, GameLobbyJoinRequested, GameRichPresenceJoinRequested, LobbyChatMsg, LobbyId, LobbyType, P2PSessionRequest, PersonaStateChange, SendType, SteamId};
+use steamworks::networking_messages::{NetworkingMessages, NetworkingMessagesSessionRequest, SessionRequest};
 use steamworks::networking_types::{NetworkingIdentity, SendFlags};
 
 mod client;
@@ -106,6 +106,7 @@ impl Default for State {
             println!("GOT GAME JOIN REQUEST");
             sender_game_rich_presence_join_accept.send(request).unwrap();
         });
+        
 
         let settings: settings::Settings = confy::load("multiplayer", None).unwrap_or_default();
         match settings.mode {
@@ -297,19 +298,19 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     state.peers.push(*steam_id);
                 });
                 println!("Peers: {:?}", state.peers);
-                let _ = state.messages.send_message_to_user(
-                    NetworkingIdentity::new_steam_id(host_id),
-                    SendFlags::RELIABLE,
-                    format!("{} JOINED", state.client.friends().name()).as_bytes(),
-                    0,
-                );
-                // When you connected to lobby you have to send a "ping" message to host
-                // After that host will add you into peer list
-                state.networking.send_p2p_packet(
-                    host_id,
-                    SendType::Reliable,
-                    format!("{} JOINED", state.client.friends().name()).as_bytes(),
-                );
+                // let _ = state.messages.send_message_to_user(
+                //     NetworkingIdentity::new_steam_id(host_id),
+                //     SendFlags::RELIABLE,
+                //     format!("{} JOINED", state.client.friends().name()).as_bytes(),
+                //     0,
+                // );
+                // // When you connected to lobby you have to send a "ping" message to host
+                // // After that host will add you into peer list
+                // state.networking.send_p2p_packet(
+                //     host_id,
+                //     SendType::Reliable,
+                //     format!("{} JOINED", state.client.friends().name()).as_bytes(),
+                // );
             }
 
             if let Ok(request) = state.receiver_game_lobby_join_accept.try_recv() {
@@ -342,16 +343,16 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         state.peers.push(user);
                         state.networking.accept_p2p_session(user);
                     }
-                    if state.lobby_id.is_some() {
-                        match host.rx_capt.try_recv() {
-                            Ok(data) => {
-                                // println!("Got data from capture thread: {:?}", data);
+                    match host.rx_capt.try_recv() {
+                        Ok(data) => {
+                            // println!("Got data from capture thread: {:?}", data);
                             //         let _ = state.networking.send_p2p_packet(
                             //             SteamId::from_raw(76561199883301606),
                             //             SendType::UnreliableNoDelay,
                             //             data.as_slice(),
-                            //         );
-                                for peer in &state.matchmaking.lobby_members(state.lobby_id.unwrap()) {
+                            //         ); 
+                            if state.lobby_id.is_some() && !state.peers.is_empty() {
+                                for peer in &state.peers {
                                     // let identity = NetworkingIdentity::new_steam_id(SteamId::from_raw(76561199883301606));
                                     let identity = NetworkingIdentity::new_steam_id(*peer);
                                     let _ = state.messages.send_message_to_user(
@@ -362,8 +363,15 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                     );
                                 }
                             }
-                            Err(e) => println!("Error: {}", e),
                         }
+                        Err(try_recv_error) => match try_recv_error {
+                            std::sync::mpsc::TryRecvError::Empty => {
+                                println!("Empty buffer on capture thread");
+                            },
+                            std::sync::mpsc::TryRecvError::Disconnected => {
+                                println!("Capture thread disconnected");
+                            },
+                        }, 
                     }
                 },
                 Screen::Client(client) => {
@@ -381,19 +389,22 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     //         }
                     //     }
                     for message in state.messages.receive_messages_on_channel(0, 100) {
+                        println!("Got message!");
                         let peer = message.identity_peer();
                         let data = message.data();
-                        let mut opus_decoder_buffer = [0f32; 960];
-                        match client.opus_decoder.decode_float(&data, opus_decoder_buffer.as_mut_slice(), false) {
+                        match client.opus_decoder.decode_float(&data, client.opus_decoder_buffer.as_mut_slice(), false) {
                             Ok(_result) => {
-                                let samples_buffer = SamplesBuffer::new(2, 48000, opus_decoder_buffer);
+                                let samples_buffer = SamplesBuffer::new(2, 48000, client.opus_decoder_buffer);
                                 client.sink.append(samples_buffer);
+                                client.opus_decoder_buffer.fill(0.0);
                             }
                             Err(e) => println!("error: {}", e)
                         }
                     }
                 }
             }
+
+            
             Task::none()       
         },
         Message::LobbyJoinIdChanged(new_lobby_join_id) => {
