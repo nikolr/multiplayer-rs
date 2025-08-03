@@ -375,6 +375,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 },
                 Screen::Client(client) => {
                     if let Some(net_connection) = &mut client.net_connection {
+                        let connection_info = state.sockets.get_connection_info(net_connection);
+                        println!("Connection info: {:?}", connection_info);
                         match net_connection.receive_messages(100) {
                             Ok(messages) => {
                                 for message in messages {
@@ -450,7 +452,7 @@ fn view(state: &State) -> Element<Message> {
     
     match &state.screen {
         Screen::Host(host) => {
-            if host.listen_socket.is_some() { 
+            if host.listen_socket.is_some() {
                 return column![
                     host.view().map(Message::Host)
             ].into();
