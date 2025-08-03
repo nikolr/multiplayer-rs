@@ -8,7 +8,8 @@ use iced_aw::{TabBarPosition, TabLabel, Tabs};
 use rodio::buffer::SamplesBuffer;
 use steamworks::{AppId, CallbackHandle, CallbackResult, Client, FriendFlags, GameLobbyJoinRequested, GameRichPresenceJoinRequested, LobbyChatMsg, LobbyId, LobbyType, P2PSessionRequest, PersonaStateChange, SendType, SteamId};
 use steamworks::networking_messages::{NetworkingMessages, NetworkingMessagesSessionRequest, SessionRequest};
-use steamworks::networking_types::{NetworkingIdentity, SendFlags};
+use steamworks::networking_sockets::NetworkingSockets;
+use steamworks::networking_types::{ListenSocketEvent, NetworkingConfigEntry, NetworkingIdentity, SendFlags};
 
 mod client;
 mod host;
@@ -34,6 +35,7 @@ struct State {
     matchmaking: steamworks::Matchmaking,
     networking: steamworks::Networking,
     messages: NetworkingMessages,
+    sockets: NetworkingSockets,
     receiver_create_lobby: std::sync::mpsc::Receiver<steamworks::LobbyId>,
     sender_create_lobby: std::sync::mpsc::Sender<steamworks::LobbyId>,
     receiver_join_lobby: std::sync::mpsc::Receiver<steamworks::LobbyId>,
@@ -65,6 +67,7 @@ impl Default for State {
         let matchmaking = client.matchmaking();
         let networking = client.networking();
         let messages = client.networking_messages();
+        let sockets = client.networking_sockets();
 
         messages.session_request_callback(move |req| {
             println!("Accepting session request from {:?}", req.remote());
@@ -118,6 +121,7 @@ impl Default for State {
                     matchmaking,
                     networking,
                     messages,
+                    sockets,
                     receiver_create_lobby,
                     sender_create_lobby,
                     receiver_join_lobby,
@@ -135,11 +139,12 @@ impl Default for State {
             },
             settings::Mode::Client => {
                 State {
-                    screen: Screen::Client(client::client::Client::new()),
+                    screen: Screen::Client(client::client::Client::new(None)),
                     client: cloned_client,
                     matchmaking,
                     networking,
                     messages,
+                    sockets,   
                     receiver_create_lobby,
                     sender_create_lobby,
                     receiver_join_lobby,
@@ -283,21 +288,25 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             // println!("Steam callback");
             state.client.run_callbacks();
 
-            if let Ok(lobby) = state.receiver_create_lobby.try_recv() {
-                println!("CREATED LOBBY WITH ID: {}", lobby.raw());
-                state.lobby_id = Some(lobby);
-            }
-
             if let Ok(lobby) = state.receiver_join_lobby.try_recv() {
                 println!("JOINED TO LOBBY WITH ID: {}", lobby.raw());
                 let host_id = state.matchmaking.lobby_owner(lobby);
                 state.lobby_id = Some(lobby);
-                state.screen = Screen::Client(client::client::Client::new());
 
                 state.matchmaking.lobby_members(lobby).iter().for_each(|steam_id| {
                     state.peers.push(*steam_id);
                 });
-                println!("Peers: {:?}", state.peers);
+                println!("Peers from client perspective: {:?}", state.peers);
+                
+                println!("Trying to connect to host: {}", host_id.raw());
+                let net_connection = state.sockets.connect_p2p(
+                    NetworkingIdentity::from(host_id),
+                    0,
+                    vec![],
+                ).expect("Failed to connect to peer");
+
+                println!("Connection established {:#?}", net_connection.connection_name());
+                state.screen = Screen::Client(client::client::Client::new(Some(net_connection)));
                 // let _ = state.messages.send_message_to_user(
                 //     NetworkingIdentity::new_steam_id(host_id),
                 //     SendFlags::RELIABLE,
@@ -325,23 +334,43 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 });
 
             }
-
-            // if let Ok(user) = state.receiver_accept.try_recv() {
-            //     println!("GET REQUEST FROM {}", user.raw());
-            //     state.peers.push(user);
-            //     state.networking.accept_p2p_session(user);
-            //     println!("Peers: {:?}", state.peers);
-            //     println!("Friend info: {:#?}", state.client.friends().request_user_information(user, true));
-            //     println!("Friend {:#?}", state.client.friends().get_friend(user).name());
-            //     println!("{:#?}", state.matchmaking.lobby_members(state.lobby_id.unwrap()));
-            // }
             
+            // TODO: Switch to using steamworks::NetworkingSockets
             match &mut state.screen {
                 Screen::Host(host) => {
-                    if let Ok(user) = state.receiver_accept.try_recv() {
-                        println!("GET REQUEST FROM {}", user.raw());
-                        state.peers.push(user);
-                        state.networking.accept_p2p_session(user);
+                    if let Ok(lobby) = state.receiver_create_lobby.try_recv() {
+                        println!("CREATED LOBBY WITH ID: {}", lobby.raw());
+                        state.lobby_id = Some(lobby);
+
+                        let listen_socket = state.sockets.create_listen_socket_p2p(
+                            0,
+                            vec![],
+                        ).expect("Failed to create listen socket");
+                        host.listen_socket = Some(listen_socket);
+                    }
+                    // if let Ok(user) = state.receiver_accept.try_recv() {
+                    //     println!("GET REQUEST FROM {}", user.raw());
+                    //     state.peers.push(user);
+                    //     state.networking.accept_p2p_session(user);
+                    // 
+                    // }
+                    if let Some(listen_socket) = host.listen_socket.as_mut() {
+                        while let Some(event) = listen_socket.try_receive_event() {
+                            match event {
+                                ListenSocketEvent::Connecting(connection_request) => {
+                                    println!("Got connection request from peer: {:?}", connection_request.remote().steam_id().expect("Failed to get steam id from connection"));
+                                    let _ = connection_request.accept();
+                                },
+                                ListenSocketEvent::Connected(connected_event) => {
+                                    println!("Connected to peer: {:?}", connected_event.remote().steam_id().expect("Failed to get steam id from connection"));
+                                    state.peers.push(connected_event.remote().steam_id().expect("Failed to get steam id from connection"));
+                                },
+                                ListenSocketEvent::Disconnected(disconnected_event) => {
+                                    println!("Disconnected from peer: {:?}", disconnected_event.remote().steam_id().expect("Failed to get steam id from connection"));
+                                    state.peers.retain(|peer| *peer != disconnected_event.remote().steam_id().expect("Failed to get steam id from connection"));
+                                },
+                            }
+                        }
                     }
                     match host.rx_capt.try_recv() {
                         Ok(data) => {
@@ -388,19 +417,43 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     //             Err(e) => println!("error: {}", e)
                     //         }
                     //     }
-                    for message in state.messages.receive_messages_on_channel(0, 100) {
-                        println!("Got message!");
-                        let peer = message.identity_peer();
-                        let data = message.data();
-                        match client.opus_decoder.decode_float(&data, client.opus_decoder_buffer.as_mut_slice(), false) {
-                            Ok(_result) => {
-                                let samples_buffer = SamplesBuffer::new(2, 48000, client.opus_decoder_buffer);
-                                client.sink.append(samples_buffer);
-                                client.opus_decoder_buffer.fill(0.0);
-                            }
-                            Err(e) => println!("error: {}", e)
+                    if let Some(net_connection) = &mut client.net_connection {
+                        match net_connection.receive_messages(100) {
+                            Ok(messages) => {
+                                for message in messages {
+                                    println!("Got message!");
+                                    let peer = message.identity_peer();
+                                    let data = message.data();
+                                    match client.opus_decoder.decode_float(&data, client.opus_decoder_buffer.as_mut_slice(), false) {
+                                        Ok(_result) => {
+                                            let samples_buffer = SamplesBuffer::new(2, 48000, client.opus_decoder_buffer);
+                                            client.sink.append(samples_buffer);
+                                            client.opus_decoder_buffer.fill(0.0);
+                                        }
+                                        Err(e) => println!("error: {}", e)
+                                    }
+                                }
+                                
+                            },
+                            Err(invalid_handle_error) => {
+                                println!("Invalid handle error: {:?}", invalid_handle_error);
+                            },
                         }
+
                     }
+                    // for message in state.messages.receive_messages_on_channel(0, 100) {
+                    //     println!("Got message!");
+                    //     let peer = message.identity_peer();
+                    //     let data = message.data();
+                    //     match client.opus_decoder.decode_float(&data, client.opus_decoder_buffer.as_mut_slice(), false) {
+                    //         Ok(_result) => {
+                    //             let samples_buffer = SamplesBuffer::new(2, 48000, client.opus_decoder_buffer);
+                    //             client.sink.append(samples_buffer);
+                    //             client.opus_decoder_buffer.fill(0.0);
+                    //         }
+                    //         Err(e) => println!("error: {}", e)
+                    //     }
+                    // }
                 }
             }
 

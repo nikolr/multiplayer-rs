@@ -6,6 +6,7 @@ use opus::Channels::Stereo;
 use rodio::buffer::SamplesBuffer;
 use rodio::OutputStream;
 use serde::{Deserialize, Serialize};
+use steamworks::networking_sockets::NetConnection;
 
 const SERVER_PORT: u16 = 9475;
 
@@ -18,6 +19,7 @@ pub struct Client {
     output_stream: OutputStream,
     pub(crate) sink: rodio::Sink,
     ready: bool,
+    pub(crate) net_connection: Option<NetConnection>,
 }
 
 #[derive(Debug, Clone)]
@@ -56,14 +58,18 @@ impl Default for Client {
             output_stream: stream_handle,
             sink,
             ready: false,
+            net_connection: None,       
         }
     }
 }
 
 impl Client {
     
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(net_connection: Option<NetConnection>) -> Self {
+        let mut client = Self::default();
+        client.net_connection = net_connection;
+        client   
+        
     }
 
     pub fn subscription(&self) -> Subscription<Message> {

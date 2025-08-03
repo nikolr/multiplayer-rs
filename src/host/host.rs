@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 use std::{error, io, thread};
+use steamworks::networking_sockets::ListenSocket;
 use sysinfo::{get_current_pid, Pid};
 use wasapi::{initialize_mta, AudioClient, Direction, SampleType, StreamMode, WaveFormat};
 
@@ -82,6 +83,7 @@ pub struct Host {
     pub capture_thread_handle: Option<JoinHandle<()>>,
     pub rx_capt: std::sync::mpsc::Receiver<Vec<u8>>,
     pub tx_cancel: Option<std::sync::mpsc::Sender<()>>,
+    pub listen_socket: Option<ListenSocket>,
 }
 
 impl Host {
@@ -155,6 +157,7 @@ impl Host {
             capture_thread_handle: handle.ok(),
             rx_capt: rx_capt,
             tx_cancel: Some(tx_cancel),
+            listen_socket: None,
         }
     }
 
