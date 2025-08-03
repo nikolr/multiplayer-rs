@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::net::SocketAddrV4;
 use std::str::FromStr;
 use std::sync::mpsc;
@@ -8,8 +9,8 @@ use iced_aw::{TabBarPosition, TabLabel, Tabs};
 use rodio::buffer::SamplesBuffer;
 use steamworks::{AppId, CallbackHandle, CallbackResult, Client, FriendFlags, GameLobbyJoinRequested, GameRichPresenceJoinRequested, LobbyChatMsg, LobbyId, LobbyType, P2PSessionRequest, PersonaStateChange, SendType, SteamId};
 use steamworks::networking_messages::{NetworkingMessages, NetworkingMessagesSessionRequest, SessionRequest};
-use steamworks::networking_sockets::NetworkingSockets;
-use steamworks::networking_types::{ListenSocketEvent, NetworkingConfigEntry, NetworkingIdentity, SendFlags};
+use steamworks::networking_sockets::{NetConnection, NetworkingSockets};
+use steamworks::networking_types::{ListenSocketEvent, NetworkingConfigEntry, NetworkingIdentity, NetworkingMessage, SendFlags};
 
 mod client;
 mod host;
@@ -46,7 +47,8 @@ struct State {
     lobby_join_id: String,
     lobby_id: Option<steamworks::LobbyId>,
     lobby_host_id: Option<steamworks::SteamId>,
-    peers: Vec<steamworks::SteamId>,
+    networking_identity: NetworkingIdentity,
+    peers: HashMap<SteamId, NetConnection>,
     request_callback: CallbackHandle,
     game_lobby_join_requested_callback: CallbackHandle,
 }
@@ -64,6 +66,8 @@ impl Default for State {
 
         let cloned_client = client.clone();
 
+        let networking_identity = NetworkingIdentity::new_steam_id(client.user().steam_id());
+        
         let matchmaking = client.matchmaking();
         let networking = client.networking();
         let messages = client.networking_messages();
@@ -132,7 +136,8 @@ impl Default for State {
                     lobby_join_id: String::new(),
                     lobby_id: None,
                     lobby_host_id: None,
-                    peers: vec![],
+                    networking_identity,
+                    peers: HashMap::new(),
                     request_callback,
                     game_lobby_join_requested_callback,
                 }
@@ -155,7 +160,8 @@ impl Default for State {
                     lobby_join_id: String::new(),
                     lobby_id: None,
                     lobby_host_id: None,
-                    peers: vec![],
+                    networking_identity,
+                    peers: HashMap::new(),
                     request_callback,
                     game_lobby_join_requested_callback,
                 }
@@ -293,10 +299,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 let host_id = state.matchmaking.lobby_owner(lobby);
                 state.lobby_id = Some(lobby);
 
-                state.matchmaking.lobby_members(lobby).iter().for_each(|steam_id| {
-                    state.peers.push(*steam_id);
-                });
-                println!("Peers from client perspective: {:?}", state.peers);
+                // state.matchmaking.lobby_members(lobby).iter().for_each(|steam_id| {
+                //     state.peers.push(*steam_id);
+                // });
+                // println!("Peers from client perspective: {:?}", state.peers);
                 
                 println!("Trying to connect to host: {}", host_id.raw());
                 let net_connection = state.sockets.connect_p2p(
@@ -305,7 +311,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     vec![],
                 ).expect("Failed to connect to peer");
 
-                println!("Connection established {:#?}", net_connection.connection_name());
+                println!("Connection established");
                 state.screen = Screen::Client(client::client::Client::new(Some(net_connection)));
                 // let _ = state.messages.send_message_to_user(
                 //     NetworkingIdentity::new_steam_id(host_id),
@@ -342,10 +348,12 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         println!("CREATED LOBBY WITH ID: {}", lobby.raw());
                         state.lobby_id = Some(lobby);
 
+                        println!("Creating listen socket...");
                         let listen_socket = state.sockets.create_listen_socket_p2p(
                             0,
                             vec![],
                         ).expect("Failed to create listen socket");
+                        println!("Created listen socket");
                         host.listen_socket = Some(listen_socket);
                     }
                     // if let Ok(user) = state.receiver_accept.try_recv() {
@@ -363,11 +371,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                 },
                                 ListenSocketEvent::Connected(connected_event) => {
                                     println!("Connected to peer: {:?}", connected_event.remote().steam_id().expect("Failed to get steam id from connection"));
-                                    state.peers.push(connected_event.remote().steam_id().expect("Failed to get steam id from connection"));
+                                    state.peers.insert(connected_event.remote().steam_id().expect("Failed to get steam id from connection"), connected_event.take_connection());
                                 },
                                 ListenSocketEvent::Disconnected(disconnected_event) => {
                                     println!("Disconnected from peer: {:?}", disconnected_event.remote().steam_id().expect("Failed to get steam id from connection"));
-                                    state.peers.retain(|peer| *peer != disconnected_event.remote().steam_id().expect("Failed to get steam id from connection"));
+                                    state.peers.remove(&disconnected_event.remote().steam_id().expect("Failed to get steam id from connection"));
                                 },
                             }
                         }
@@ -381,16 +389,22 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             //             data.as_slice(),
                             //         ); 
                             if state.lobby_id.is_some() && !state.peers.is_empty() {
+                                let mut networking_messages = Vec::with_capacity(state.peers.len());
                                 for peer in &state.peers {
                                     // let identity = NetworkingIdentity::new_steam_id(SteamId::from_raw(76561199883301606));
-                                    let identity = NetworkingIdentity::new_steam_id(*peer);
-                                    let _ = state.messages.send_message_to_user(
-                                        identity,
-                                        SendFlags::UNRELIABLE_NO_DELAY,
-                                        data.as_slice(),
-                                        0,
-                                    );
+                                    let identity = NetworkingIdentity::new_steam_id(*peer.0);
+                                    let mut networking_message = state.client.networking_utils().allocate_message(80);
+                                    // networking_message.set_data(data.clone()).expect("Unable to set data to netwoking_message");
+                                    networking_message.set_identity_peer(state.networking_identity.clone());
+                                    networking_message.copy_data_into_buffer(data.as_slice()).unwrap();
+                                    networking_message.set_send_flags(SendFlags::UNRELIABLE_NO_DELAY);
+                                    networking_message.set_connection(peer.1);
+                                    networking_messages.push(networking_message);
+
                                 }
+                                host.listen_socket.as_mut()
+                                    .expect("Host should have a listen socket if it has connected peers")
+                                    .send_messages(networking_messages);
                             }
                         }
                         Err(try_recv_error) => match try_recv_error {
