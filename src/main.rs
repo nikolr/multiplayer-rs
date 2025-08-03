@@ -373,8 +373,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         match net_connection.receive_messages(100) {
                             Ok(messages) => {
                                 for message in messages {
-                                    println!("Got message!");
-                                    let peer = message.identity_peer();
                                     let data = message.data();
                                     match client.opus_decoder.decode_float(&data, client.opus_decoder_buffer.as_mut_slice(), false) {
                                         Ok(_result) => {
@@ -454,7 +452,6 @@ fn view(state: &State) -> Element<Message> {
         },
         Screen::Client(client) => {
             column![
-                tab_bar,
                 client_view,
             ].into()
         },
