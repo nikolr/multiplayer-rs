@@ -1,4 +1,3 @@
-use crate::client::connection;
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{column, container, Button, Column, Container, Row, Text, TextInput};
 use iced::{Alignment, Element, Event, Length, Subscription, Task};
@@ -11,33 +10,16 @@ use steamworks::networking_sockets::NetConnection;
 const SERVER_PORT: u16 = 9475;
 
 pub struct Client {
-    username: String,
-    server_address: String,
-    state: State,
     pub(crate) opus_decoder: opus::Decoder,
     pub(crate) opus_decoder_buffer: [f32; 960],
     output_stream: OutputStream,
     pub(crate) sink: rodio::Sink,
-    ready: bool,
     pub(crate) net_connection: Option<NetConnection>,
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
-    UsernameChanged(String),
-    ServerAddressChanged(String),
-    ClearPressed,
-    ConnectPressed,
     DisconnectPressed,
-    ConnectionEvent(connection::Event),
-    Event(Event),
-    Send(connection::Message),
-}
-
-enum State {
-    Connecting,
-    Disconnected,
-    Connected(connection::Connection),
 }
 
 impl Default for Client {
@@ -50,14 +32,10 @@ impl Default for Client {
         let sink = rodio::Sink::connect_new(&stream_handle.mixer());
 
         Self {
-            username: String::from("Username"),
-            server_address: String::from("192.168.0.31"),
-            state: State::Disconnected,
             opus_decoder,
             opus_decoder_buffer,
             output_stream: stream_handle,
             sink,
-            ready: false,
             net_connection: None,       
         }
     }
@@ -71,177 +49,30 @@ impl Client {
         client   
         
     }
-
-    pub fn subscription(&self) -> Subscription<Message> {
-        match self.ready {
-            true => {
-                Subscription::run_with_id("main" ,connection::connect(self.server_address.clone(), self.username.clone())).map(Message::ConnectionEvent)
-            }
-            false => {
-                iced::event::listen().map(Message::Event)
-            }
-        }
-    }
-
     pub fn update(&mut self, message: Message) -> Task<Message>{
         match message {
-            Message::UsernameChanged(username) => {
-                self.username = username;
-
-                Task::none()
-            },
-            Message::ServerAddressChanged(server_address) => {
-                self.server_address = server_address;
-
-                Task::none()
-            },
-            Message::ClearPressed => {
-                
-                Task::none()
-            },
-            Message::ConnectPressed => {
-                self.state = State::Connecting;
-                self.ready = true;
-
-                Task::none()
-
-            },
             Message::DisconnectPressed => {
-                self.state = State::Disconnected;
-                self.ready = false;
+                self.net_connection.take();
                 self.sink.stop();
                 
                 Task::none()
             },
-            Message::Send(message) => match &mut self.state {
-                State::Connected(connection) => {
-                    self.username.clear();
-
-                    connection.send(message);
-
-                    Task::none()
-                }
-                State::Disconnected => Task::none(),
-                State::Connecting => Task::none(),
-            },
-            Message::ConnectionEvent(event) => match event {
-                connection::Event::Connected(connection) => {
-                    println!("Received Connected Event");
-                    self.state = State::Connected(connection);
-
-                    Task::none()
-                }
-                connection::Event::Disconnected => {
-                    println!("Received Disconnected Event");
-                    self.state = State::Disconnected;
-                    self.ready = false;
-                    self.sink.stop();
-
-                    Task::none()
-                }
-                connection::Event::DataReceived(data) => {
-                    let mut opus_decoder_buffer = [0f32; 960];
-                    match self.opus_decoder.decode_float(&data, opus_decoder_buffer.as_mut_slice(), false) {
-                        Ok(_result) => {
-                            let samples_buffer = SamplesBuffer::new(2, 48000, opus_decoder_buffer);
-                            self.sink.append(samples_buffer); 
-                        }
-                        Err(e) => println!("error: {}", e)
-                    } 
-
-                    Task::none()
-                }
-            },
-            Message::Event(event) => match event {
-                Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                                    key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Tab),
-                                    modifiers,
-                                    ..
-                                }) => {
-                    if modifiers.shift() {
-                        iced::widget::focus_previous()
-                    } else {
-                        iced::widget::focus_next()
-                    }
-                },
-                _ => Task::none(),
-            }
         }
     }
 
     pub fn view(&self) -> Element<Message> {
-        match self.state {
-            State::Connected(_) => {
-                container(
-                    column![
-                        Container::new(Text::new("Connected").center().align_x(Horizontal::Center)),
-                        Button::new(Text::new("Disconnect").center().align_x(Horizontal::Center))
-                            .on_press(Message::DisconnectPressed),
-                    ]
-                )
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .align_x(Horizontal::Center)
-                    .align_y(Vertical::Center)
-                    .into()
-            }
-            State::Disconnected | State::Connecting => {
-                let content: Element<Message> = Container::new(
-                    Column::new()
-                        .align_x(Alignment::Center)
-                        .max_width(600)
-                        .padding(20)
-                        .spacing(16)
-                        .push(
-                            TextInput::new("Username", &self.username)
-                                .on_input(Message::UsernameChanged)
-                                .padding(10)
-                                .size(32),
-                        )
-                        .push(
-                            TextInput::new("Server IP", &self.server_address)
-                                .on_input(Message::ServerAddressChanged)
-                                .padding(10)
-                                .size(32)
-                        )
-                        .push(
-                            Row::new()
-                                .spacing(10)
-                                .push(
-                                    Button::new(Text::new("Clear").align_x(Horizontal::Center))
-                                        .width(Length::Fill)
-                                        .on_press(Message::ClearPressed),
-                                )
-                                .push(
-                                    Button::new(Text::new(
-                                        match self.state {
-                                            State::Connecting => "Cancel...",
-                                            State::Disconnected => "Connect",
-                                            State::Connected(_) => unreachable!(),
-                                        }
-                                    ).align_x(Horizontal::Center))
-                                        .width(Length::Fill)
-                                        .on_press(
-                                            match self.state {
-                                                State::Connecting => {
-                                                    Message::DisconnectPressed
-                                                }
-                                                State::Disconnected => {
-                                                    Message::ConnectPressed
-                                                }
-                                                State::Connected(_) => {
-                                                    unreachable!()
-                                                }
-                                            }
-                                        ),
-                                )
-                        ),
-                )
-                    .align_x(Horizontal::Center)
-                    .align_y(Vertical::Center)
-                    .into();
-                content
-            },
-        }
+        container(
+            column![
+                Container::new(Text::new("Connected").center().align_x(Horizontal::Center)),
+                Button::new(Text::new("Disconnect").center().align_x(Horizontal::Center))
+                    .on_press(Message::DisconnectPressed),
+            ]
+        )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Horizontal::Center)
+            .align_y(Vertical::Center)
+            .into()
+            
     }
 }

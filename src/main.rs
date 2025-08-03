@@ -3,8 +3,9 @@ use std::net::SocketAddrV4;
 use std::str::FromStr;
 use std::sync::mpsc;
 use std::time::Duration;
-use iced::widget::{column, Column, Container, Row, Space, TextInput};
+use iced::widget::{column, container, Button, Column, Container, Row, Space, Text, TextInput};
 use iced::{Alignment, Element, Font, Length, Subscription, Task, Theme};
+use iced::alignment::{Horizontal, Vertical};
 use iced_aw::{TabBarPosition, TabLabel, Tabs};
 use rodio::buffer::SamplesBuffer;
 use steamworks::{AppId, CallbackHandle, CallbackResult, Client, FriendFlags, GameLobbyJoinRequested, GameRichPresenceJoinRequested, LobbyChatMsg, LobbyId, LobbyType, P2PSessionRequest, PersonaStateChange, SendType, SteamId};
@@ -180,8 +181,8 @@ enum Message {
     Host(host::host::Message),
     Client(client::client::Message),
     TabSelected(TabId),
-    LobbyJoinIdChanged(String),
     SteamCallback,
+    DisconnectPressed,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
@@ -242,9 +243,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     settings.mode = settings::Mode::Host;
                     confy::store("multiplayer", None, &settings).unwrap();
 
-                    // let host = host::host::Host::new(settings);
-                    // state.screen = Screen::Host(host);
-
                     let local_sender_create_lobby = state.sender_create_lobby.clone();
                     state.matchmaking.create_lobby(LobbyType::FriendsOnly, 4, move |result| match result {
                         Ok(lobby_id) => {
@@ -257,53 +255,18 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     Task::none()
                 },
                 TabId::Client => {
-                    println!("Starting client");
-                    if let Screen::Host(host) = &mut state.screen {
-                        settings::save(&host).unwrap();
-
-                        match host.capture_thread_handle.take() {
-                            Some(capture_thread_handle) => {
-                                println!("Joining capture thread");
-                                let cancel = host.tx_cancel.take();
-                                cancel.unwrap().send(()).unwrap();
-                                capture_thread_handle.join().unwrap();
-                            }
-                            None => {
-                                println!("No capture thread handle to join");
-                            }
-                        }
-                    }
-
-                    // state.screen = Screen::Client(client::client::Client::new());
-                    //     let local_sender_join_lobby = state.sender_join_lobby.clone();
-                    //     state.matchmaking.join_lobby(LobbyId::from_raw(state.lobby_join_id.parse().unwrap()), move |result| match result {
-                    //         Ok(lobby) => {
-                    //             local_sender_join_lobby.send(lobby).unwrap();
-                    //             println!("Joined lobby: [{}]", lobby.raw());
-                    //         }
-                    //         Err(e) => {
-                    //             println!("Ran into error while trying to join lobby: {:?}", e);
-                    //         }
-                    //     });
 
                     Task::none()
                 },
             }
         },
         Message::SteamCallback => {
-            // println!("Steam callback");
             state.client.run_callbacks();
 
             if let Ok(lobby) = state.receiver_join_lobby.try_recv() {
                 println!("JOINED TO LOBBY WITH ID: {}", lobby.raw());
                 let host_id = state.matchmaking.lobby_owner(lobby);
                 state.lobby_id = Some(lobby);
-
-                // state.matchmaking.lobby_members(lobby).iter().for_each(|steam_id| {
-                //     state.peers.push(*steam_id);
-                // });
-                // println!("Peers from client perspective: {:?}", state.peers);
-                
                 println!("Trying to connect to host: {}", host_id.raw());
                 let net_connection = state.sockets.connect_p2p(
                     NetworkingIdentity::from(host_id),
@@ -312,20 +275,21 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 ).expect("Failed to connect to peer");
 
                 println!("Connection established");
+                if let Screen::Host(host) = &mut state.screen {
+                    match host.capture_thread_handle.take() {
+                        Some(capture_thread_handle) => {
+                            println!("Joining capture thread");
+                            let cancel = host.tx_cancel.take();
+                            cancel.unwrap().send(()).unwrap();
+                            capture_thread_handle.join().unwrap();
+                        }
+                        None => {
+                            println!("No capture thread handle to join");
+                        }
+                    }
+                }
                 state.screen = Screen::Client(client::client::Client::new(Some(net_connection)));
-                // let _ = state.messages.send_message_to_user(
-                //     NetworkingIdentity::new_steam_id(host_id),
-                //     SendFlags::RELIABLE,
-                //     format!("{} JOINED", state.client.friends().name()).as_bytes(),
-                //     0,
-                // );
-                // // When you connected to lobby you have to send a "ping" message to host
-                // // After that host will add you into peer list
-                // state.networking.send_p2p_packet(
-                //     host_id,
-                //     SendType::Reliable,
-                //     format!("{} JOINED", state.client.friends().name()).as_bytes(),
-                // );
+
             }
 
             if let Ok(request) = state.receiver_game_lobby_join_accept.try_recv() {
@@ -356,12 +320,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         println!("Created listen socket");
                         host.listen_socket = Some(listen_socket);
                     }
-                    // if let Ok(user) = state.receiver_accept.try_recv() {
-                    //     println!("GET REQUEST FROM {}", user.raw());
-                    //     state.peers.push(user);
-                    //     state.networking.accept_p2p_session(user);
-                    // 
-                    // }
                     if let Some(listen_socket) = host.listen_socket.as_mut() {
                         while let Some(event) = listen_socket.try_receive_event() {
                             match event {
@@ -382,16 +340,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     }
                     match host.rx_capt.try_recv() {
                         Ok(data) => {
-                            // println!("Got data from capture thread: {:?}", data);
-                            //         let _ = state.networking.send_p2p_packet(
-                            //             SteamId::from_raw(76561199883301606),
-                            //             SendType::UnreliableNoDelay,
-                            //             data.as_slice(),
-                            //         ); 
                             if state.lobby_id.is_some() && !state.peers.is_empty() {
                                 let mut networking_messages = Vec::with_capacity(state.peers.len());
                                 for peer in &state.peers {
-                                    // let identity = NetworkingIdentity::new_steam_id(SteamId::from_raw(76561199883301606));
                                     let identity = NetworkingIdentity::new_steam_id(*peer.0);
                                     let mut networking_message = state.client.networking_utils().allocate_message(80);
                                     // networking_message.set_data(data.clone()).expect("Unable to set data to netwoking_message");
@@ -418,19 +369,6 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     }
                 },
                 Screen::Client(client) => {
-                    // while let Some(size) = state.networking.is_p2p_packet_available() {
-                    //     let mut empty_array = vec![0; size];
-                    //     let buffer = empty_array.as_mut_slice();
-                    //     if let Some((sender, n)) = state.networking.read_p2p_packet(buffer) {
-                    //         let mut opus_decoder_buffer = [0f32; 960];
-                    //         match client.opus_decoder.decode_float(&buffer, opus_decoder_buffer.as_mut_slice(), false) {
-                    //             Ok(_result) => {
-                    //                 let samples_buffer = SamplesBuffer::new(2, 48000, opus_decoder_buffer);
-                    //                 client.sink.append(samples_buffer);
-                    //             }
-                    //             Err(e) => println!("error: {}", e)
-                    //         }
-                    //     }
                     if let Some(net_connection) = &mut client.net_connection {
                         match net_connection.receive_messages(100) {
                             Ok(messages) => {
@@ -455,28 +393,18 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         }
 
                     }
-                    // for message in state.messages.receive_messages_on_channel(0, 100) {
-                    //     println!("Got message!");
-                    //     let peer = message.identity_peer();
-                    //     let data = message.data();
-                    //     match client.opus_decoder.decode_float(&data, client.opus_decoder_buffer.as_mut_slice(), false) {
-                    //         Ok(_result) => {
-                    //             let samples_buffer = SamplesBuffer::new(2, 48000, client.opus_decoder_buffer);
-                    //             client.sink.append(samples_buffer);
-                    //             client.opus_decoder_buffer.fill(0.0);
-                    //         }
-                    //         Err(e) => println!("error: {}", e)
-                    //     }
-                    // }
                 }
             }
 
-            
             Task::none()       
         },
-        Message::LobbyJoinIdChanged(new_lobby_join_id) => {
-            state.lobby_join_id = new_lobby_join_id;
-
+        Message::DisconnectPressed => {
+            let mut settings: settings::Settings = confy::load("multiplayer", None).unwrap_or_default();
+            settings.mode = settings::Mode::Host;
+            confy::store("multiplayer", None, &settings).unwrap();
+            let host = host::host::Host::new(settings);
+            state.screen = Screen::Host(host);
+            
             Task::none()       
         },
     }
@@ -490,32 +418,33 @@ fn view(state: &State) -> Element<Message> {
             TabLabel::Text("Host".to_string()),
             Space::with_width(0.0)
         )
-        .push(
-            TabId::Client,
-            TabLabel::Text("Client".to_string()),
-            Space::with_width(0.0)
-        )
+        // .push(
+        //     TabId::Client,
+        //     TabLabel::Text("Client".to_string()),
+        //     Space::with_width(0.0)
+        // )
         .set_active_tab(&TabId::from_screen(&state.screen))
         .tab_bar_height(Length::Shrink)
         .into();
     
-    let lobby_text: Element<Message> = Container::new(Row::new()
-        .align_y(Alignment::Center)
-        .padding(20)
-        .spacing(16)
-        .push(
-            TextInput::new("Lobby id", &state.lobby_join_id)
-                .on_input(Message::LobbyJoinIdChanged)
-                .padding(10)
-                .size(32),
-        )
-    ).into();
+    let client_view: Element<Message> =
+        container(
+        column![
+                Container::new(Text::new("Connected").center().align_x(Horizontal::Center)),
+                Button::new(Text::new("Disconnect").center().align_x(Horizontal::Center))
+                    .on_press(Message::DisconnectPressed),
+            ]
+    )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(Horizontal::Center)
+        .align_y(Vertical::Center)
+        .into();
     
     match &state.screen {
         Screen::Host(host) => {
             column![
                 tab_bar,
-                lobby_text,
                 host.view().map(Message::Host)
             ].into()
         },
