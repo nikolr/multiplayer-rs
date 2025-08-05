@@ -49,8 +49,6 @@ pub enum Message {
     Pause,
     Resume,
     Stop,
-    Server,
-    SteamLobby,
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -79,7 +77,6 @@ pub struct Host {
     pub fade_in_duration: u64,
     pub fade_out_duration: u64,
     audio_seek_dragged: bool,
-    pub connected_clients: Arc<Mutex<HashMap<SocketAddr, String>>>,
     pub capture_thread_handle: Option<JoinHandle<()>>,
     pub rx_capt: std::sync::mpsc::Receiver<Vec<u8>>,
     pub tx_cancel: Option<std::sync::mpsc::Sender<()>>,
@@ -136,8 +133,6 @@ impl Host {
         let primary_track = audio_manager.add_sub_track(primary_builder).unwrap();
         let secondary_track = audio_manager.add_sub_track(secondary_builder).unwrap();
 
-        let connected_clients = Arc::new(Mutex::new(HashMap::new()));
-
         Self {
             is_loading: false,
             audio_manager,
@@ -152,7 +147,6 @@ impl Host {
             fade_in_duration: settings.fade_in_duration,
             fade_out_duration: settings.fade_out_duration,
             audio_seek_dragged: false,
-            connected_clients: connected_clients.clone(),
             capture_thread_handle: handle.ok(),
             rx_capt: rx_capt,
             tx_cancel: Some(tx_cancel),
@@ -451,13 +445,13 @@ impl Host {
             },
             Message::UpdateFadeInDurationSlider(fade_in) => {
                 self.fade_in_duration = fade_in as u64;
-                settings::save(&self).unwrap();
+                settings::save_host_settings(&self).unwrap();
 
                 Task::none()
             },
             Message::UpdateFadeOutDurationSlider(fade_out) => {
                 self.fade_out_duration = fade_out as u64;
-                settings::save(&self).unwrap();
+                settings::save_host_settings(&self).unwrap();
 
                 Task::none()
             },
@@ -502,13 +496,6 @@ impl Host {
 
                 Task::none()
             }
-            Message::Server => {
-                Task::none()
-            },
-            Message::SteamLobby => {
-                
-                Task::none()
-            }
         }
     }
 
@@ -544,18 +531,6 @@ impl Host {
             .center_x(Fill)
             .padding([6, 40]);
 
-        let connected_clients = Arc::clone(&self.connected_clients);
-        let clients = connected_clients.lock().unwrap();
-        let client_views = clients.iter().map(|client| {
-            Text::new(format!("{}", client.1))
-                .size(16)
-                .into()
-        }).collect::<Vec<Element<Message>>>();
-        let client_container = Scrollable::new(
-            Column::from_vec(client_views)
-        )
-            .spacing(2);
-        
         let controls = row![
             action(
                 open_file_icon(),
@@ -577,10 +552,6 @@ impl Host {
                 vertical_space(),
                 fade_out_slider.align_y(Alignment::End),
             ].width(FillPortion(4)),
-            text("Connected clients:")
-                .align_x(Horizontal::Left)
-                .width(FillPortion(2)),
-            client_container.width(FillPortion(2)),
         ]
             .height(84)
             .padding(4)

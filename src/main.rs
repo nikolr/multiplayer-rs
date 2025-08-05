@@ -1,17 +1,15 @@
+use iced::alignment::{Horizontal, Vertical};
+use iced::widget::{button, column, container, pick_list, row, scrollable, text, Button, Column, Container, Row, Scrollable, Text};
+use iced::{Element, FillPortion, Font, Length, Subscription, Task, Theme};
+use rodio::buffer::SamplesBuffer;
 use std::collections::HashMap;
-use std::net::SocketAddrV4;
-use std::str::FromStr;
 use std::sync::mpsc;
 use std::time::Duration;
-use iced::widget::{column, container, Button, Column, Container, Row, Space, Text, TextInput};
-use iced::{Alignment, Element, Font, Length, Subscription, Task, Theme};
-use iced::alignment::{Horizontal, Vertical};
-use iced_aw::{TabBarPosition, TabLabel, Tabs};
-use rodio::buffer::SamplesBuffer;
-use steamworks::{AppId, CallbackHandle, CallbackResult, Client, FriendFlags, GameLobbyJoinRequested, GameRichPresenceJoinRequested, LobbyChatMsg, LobbyId, LobbyType, P2PSessionRequest, PersonaStateChange, SendType, SteamId};
-use steamworks::networking_messages::{NetworkingMessages, NetworkingMessagesSessionRequest, SessionRequest};
+use iced::widget::scrollable::Scrollbar;
 use steamworks::networking_sockets::{NetConnection, NetworkingSockets};
-use steamworks::networking_types::{ListenSocketEvent, NetConnectionEnd, NetworkingConfigEntry, NetworkingConnectionState, NetworkingIdentity, NetworkingMessage, SendFlags};
+use steamworks::networking_types::{AppNetConnectionEnd, ListenSocketEvent, NetConnectionEnd, NetworkingConnectionState, NetworkingIdentity, SendFlags};
+use steamworks::{CallbackHandle, Client, Friends, GameLobbyJoinRequested, LobbyType, SteamId};
+use crate::settings::save_state_settings;
 
 mod client;
 mod host;
@@ -30,27 +28,37 @@ fn theme(_state: &State) -> Theme {
     Theme::SolarizedDark
 }
 
-
-struct State {
+pub struct State {
     screen: Screen,
     client: Client,
     matchmaking: steamworks::Matchmaking,
-    networking: steamworks::Networking,
-    messages: NetworkingMessages,
     sockets: NetworkingSockets,
-    receiver_create_lobby: std::sync::mpsc::Receiver<steamworks::LobbyId>,
-    sender_create_lobby: std::sync::mpsc::Sender<steamworks::LobbyId>,
-    receiver_join_lobby: std::sync::mpsc::Receiver<steamworks::LobbyId>,
-    sender_join_lobby: std::sync::mpsc::Sender<steamworks::LobbyId>,
-    receiver_accept: std::sync::mpsc::Receiver<steamworks::SteamId>,
-    receiver_game_lobby_join_accept: std::sync::mpsc::Receiver<GameLobbyJoinRequested>,
-    receiver_game_rich_presence_join_accept: std::sync::mpsc::Receiver<GameRichPresenceJoinRequested>,
-    lobby_join_id: String,
+    friends: Friends,
+    receiver_create_lobby: mpsc::Receiver<steamworks::LobbyId>,
+    sender_create_lobby: mpsc::Sender<steamworks::LobbyId>,
+    receiver_join_lobby: mpsc::Receiver<steamworks::LobbyId>,
+    sender_join_lobby: mpsc::Sender<steamworks::LobbyId>,
+    receiver_game_lobby_join_accept: mpsc::Receiver<GameLobbyJoinRequested>,
     lobby_id: Option<steamworks::LobbyId>,
     networking_identity: NetworkingIdentity,
-    peers: HashMap<SteamId, NetConnection>,
-    // request_callback: CallbackHandle,
+    peers: HashMap<SteamId, Peer>,
     game_lobby_join_requested_callback: CallbackHandle,
+    lobby_type: settings::LobbyType,
+    max_members: u32,
+}
+
+struct Peer {
+    name: String,
+    net_connection: NetConnection,
+}
+
+impl Peer {
+    fn new(name: String, net_connection: NetConnection) -> Self {
+        Self {
+            name,
+            net_connection,
+        }
+    }
 }
 
 impl Default for State {
@@ -60,51 +68,17 @@ impl Default for State {
         let client =
             steamworks::Client::init_app(480).expect("Steam is not running or has not been detected");
 
-        // let _cb = client.register_callback(|p: PersonaStateChange| {
-        //     println!("Got callback: {:?}", p);
-        // });
-
         let cloned_client = client.clone();
 
         let networking_identity = NetworkingIdentity::new_steam_id(client.user().steam_id());
         
         let matchmaking = client.matchmaking();
-        let networking = client.networking();
-        let messages = client.networking_messages();
         let sockets = client.networking_sockets();
-
-        // TODO: Determine if these can be deleted
-        // messages.session_request_callback(move |req| {
-        //     println!("Accepting session request from {:?}", req.remote());
-        //     req.accept();
-        // });
-        // 
-        // messages.session_failed_callback(|info| {
-        //     eprintln!("Session failed: {info:#?}");
-        // });
-
         let friends = client.friends();
-        println!("Friends");
-        let list = friends.get_friends(FriendFlags::IMMEDIATE);
-        println!("{:?}", list);
-        for f in &list {
-            println!("Friend: {:?} - {}({:?})", f.id(), f.name(), f.state());
-            friends.request_user_information(f.id(), true);
-        }
 
-        //For getting values from callback
         let (sender_create_lobby, receiver_create_lobby) = mpsc::channel();
         let (sender_join_lobby, receiver_join_lobby) = mpsc::channel();
-        let (sender_accept, receiver_accept) = mpsc::channel();
         let (sender_game_lobby_join_accept, receiver_game_lobby_join_accept) = mpsc::channel();
-        let (sender_game_rich_presence_join_accept, receiver_game_rich_presence_join_accept) = mpsc::channel();
-
-        //YOU MUST KEEP CALLBACK IN VARIABLE OTHERWISE CALLBACK WILL NOT WORK
-        // TODO: Determine if this is necessary
-        // let request_callback = client.register_callback(move |request: P2PSessionRequest| {
-        //     println!("ACCEPTED PEER");
-        //     sender_accept.send(request.remote).unwrap();
-        // });
 
         let game_lobby_join_requested_callback = client.register_callback(move |request: GameLobbyJoinRequested| {
             println!("GOT LOBBY JOIN REQUEST");
@@ -112,27 +86,24 @@ impl Default for State {
         });
 
         let settings: settings::Settings = confy::load("multiplayer", None).unwrap_or_default();
-        let host = host::host::Host::new(settings);
+        let host = host::host::Host::new(settings.clone());
         State {
             screen: Screen::Host(host),
             client: cloned_client,
             matchmaking,
-            networking,
-            messages,
             sockets,
+            friends,
             receiver_create_lobby,
             sender_create_lobby,
             receiver_join_lobby,
             sender_join_lobby,
-            receiver_accept,
             receiver_game_lobby_join_accept,
-            receiver_game_rich_presence_join_accept,
-            lobby_join_id: String::new(),
             lobby_id: None,
             networking_identity,
             peers: HashMap::new(),
-            // request_callback,
             game_lobby_join_requested_callback,
+            lobby_type: settings.lobby_type,
+            max_members: settings.max_members,
         }
     }
 }
@@ -145,26 +116,12 @@ enum Screen {
 #[derive(Debug, Clone)]
 enum Message {
     Host(host::host::Message),
-    Client(client::client::Message),
-    TabSelected(TabId),
+    CreateLobbyButtonPressed,
+    LeaveLobbyButtonPressed,
+    MaxPlayersChanged(u32),
+    LobbyTypeChanged(settings::LobbyType),
     SteamCallback,
     DisconnectPressed,
-}
-
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
-enum TabId {
-    #[default]
-    Host,
-    Client,
-}
-
-impl TabId {
-    fn from_screen(screen: &Screen) -> Self {
-        match screen {
-            Screen::Host(_) => TabId::Host,
-            Screen::Client(_) => TabId::Client,
-        }
-    }
 }
 
 fn subscription(state: &State) -> Subscription<Message> {
@@ -194,42 +151,30 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 Task::none()
             }
         },
-        Message::Client(message) => {
-            if let Screen::Client(client) = &mut state.screen {
-                // client.update(message).map(Message::Client)
-                Task::none()
-            } else {
-                Task::none()
+
+        Message::CreateLobbyButtonPressed => {
+            if let Screen::Host(host) = &mut state.screen {
+                if host.listen_socket.is_some() {
+                    return Task::none();
+                }
             }
-        },
-        Message::TabSelected(tab_id) => {
-            println!("Tab selected: {:?}", tab_id);
-            match tab_id {
-                TabId::Host => {
-                    if let Screen::Host(host) = &mut state.screen {
-                        if host.listen_socket.is_some() {
-                            return Task::none();
-                        }
+            let settings: settings::Settings = confy::load("multiplayer", None).unwrap_or_default();
+            confy::store("multiplayer", None, &settings).unwrap();
+
+            let local_sender_create_lobby = state.sender_create_lobby.clone();
+            println!("Creating lobby with max_members: {} and lobby_type: {}", settings.max_members, settings.lobby_type);
+            state.matchmaking.create_lobby(
+                state.lobby_type.into(), 
+                state.max_members,
+                move |result| match result {
+                    Ok(lobby_id) => {
+                        local_sender_create_lobby.send(lobby_id).unwrap();
+                        println!("Created lobby: [{}]", lobby_id.raw());
                     }
-                    let settings: settings::Settings = confy::load("multiplayer", None).unwrap_or_default();
-                    confy::store("multiplayer", None, &settings).unwrap();
+                    Err(err) => panic!("SteamError: {}", err),
+            });
 
-                    let local_sender_create_lobby = state.sender_create_lobby.clone();
-                    state.matchmaking.create_lobby(LobbyType::FriendsOnly, 4, move |result| match result {
-                        Ok(lobby_id) => {
-                            local_sender_create_lobby.send(lobby_id).unwrap();
-                            println!("Created lobby: [{}]", lobby_id.raw());
-                        }
-                        Err(err) => panic!("Error: {}", err),
-                    });
-
-                    Task::none()
-                },
-                TabId::Client => {
-
-                    Task::none()
-                },
-            }
+            Task::none()
         },
         Message::SteamCallback => {
             state.client.run_callbacks();
@@ -260,15 +205,12 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     }
                 }
                 state.screen = Screen::Client(client::client::Client::new(net_connection));
-
             }
 
             if let Ok(request) = state.receiver_game_lobby_join_accept.try_recv() {
                 println!("Received lobby join request: {:#?}", request);
-                if let Some(lobby_id) = state.lobby_id {
-                    println!("Leaving lobby before trying to join new one: {}", lobby_id.raw());
-                    state.matchmaking.leave_lobby(lobby_id);
-                }
+                leave_lobby(state);
+
                 let sender_join_lobby_clone = state.sender_join_lobby.clone();
                 state.matchmaking.join_lobby(request.lobby_steam_id, move |result| {
                     if let Ok(lobby) = result {
@@ -304,7 +246,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                 },
                                 ListenSocketEvent::Connected(connected_event) => {
                                     println!("Connected to peer: {:?}", connected_event.remote().steam_id().expect("Failed to get steam id from connection"));
-                                    state.peers.insert(connected_event.remote().steam_id().expect("Failed to get steam id from connection"), connected_event.take_connection());
+                                    state.peers.insert(connected_event.remote().steam_id().expect("Failed to get steam id from connection"), Peer::new(state.friends.get_friend(connected_event.remote().steam_id().expect("Should be able to get PersonaName if they are in the same lobby")).name() ,connected_event.take_connection()));
                                 },
                                 ListenSocketEvent::Disconnected(disconnected_event) => {
                                     println!("Disconnected from peer: {:?}", disconnected_event.remote().steam_id().expect("Failed to get steam id from connection"));
@@ -324,9 +266,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                     networking_message.set_identity_peer(state.networking_identity.clone());
                                     networking_message.copy_data_into_buffer(data.as_slice()).unwrap();
                                     networking_message.set_send_flags(SendFlags::UNRELIABLE_NO_DELAY);
-                                    networking_message.set_connection(peer.1);
+                                    networking_message.set_connection(&peer.1.net_connection);
                                     networking_messages.push(networking_message);
-
                                 }
                                 host.listen_socket.as_mut()
                                     .expect("Host should have a listen socket if it has connected peers")
@@ -334,13 +275,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                             }
                         }
                         Err(try_recv_error) => match try_recv_error {
-                            std::sync::mpsc::TryRecvError::Empty => {
+                            mpsc::TryRecvError::Empty => {
                                 println!("Empty buffer on capture thread");
                             },
-                            std::sync::mpsc::TryRecvError::Disconnected => {
+                            mpsc::TryRecvError::Disconnected => {
                                 println!("Capture thread disconnected");
                             },
-                        }, 
+                        },
                     }
                 },
                 Screen::Client(client) => {
@@ -354,20 +295,18 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                                     NetworkingConnectionState::FindingRoute => {}
                                     NetworkingConnectionState::Connected => {}
                                     NetworkingConnectionState::ClosedByPeer => {
-                                        let net_connection = client.net_connection.take();
-                                        net_connection.expect("net_connection should exist when trying to close it").close(NetConnectionEnd::RemoteTimeout, None, false);
-                                        client.sink.stop();
-                                        let settings: settings::Settings = confy::load("multiplayer", None).unwrap_or_default();
-                                        confy::store("multiplayer", None, &settings).unwrap();
-                                        let host = host::host::Host::new(settings);
-                                        state.lobby_id = None;
-                                        state.screen = Screen::Host(host);
+                                        disconnect(state, NetConnectionEnd::RemoteTimeout);
+
                                         return Task::none();
                                     }
-                                    NetworkingConnectionState::ProblemDetectedLocally => {}
+                                    NetworkingConnectionState::ProblemDetectedLocally => {
+                                        disconnect(state, NetConnectionEnd::LocalOfflineMode);
+
+                                        return Task::none();
+                                    }
                                 }
-                                Err(invalid_connection_state) => {
-                                    println!("Invalid connection state: {:?}", invalid_connection_state);
+                                Err(_invalid_connection_state) => {
+                                    println!("Invalid connection handle");
                                 },
                             },
                             Err(b) => {
@@ -399,36 +338,50 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             Task::none()       
         },
         Message::DisconnectPressed => {
-            if let Screen::Client(client) = &mut state.screen {
-                client.net_connection.take();
-                client.sink.stop();
-            }
-            let settings: settings::Settings = confy::load("multiplayer", None).unwrap_or_default();
-            confy::store("multiplayer", None, &settings).unwrap();
-            let host = host::host::Host::new(settings);
-            state.lobby_id = None;
-            state.screen = Screen::Host(host);
+            disconnect(state, NetConnectionEnd::App(AppNetConnectionEnd::normal(0)));
             
             Task::none()       
+        },
+        Message::MaxPlayersChanged(value) => {
+            state.max_members = value;
+            save_state_settings(state).unwrap();
+            
+            Task::none()
+        },
+        Message::LobbyTypeChanged(lobby_type) => {
+            state.lobby_type = lobby_type;
+            save_state_settings(state).unwrap();
+            
+            Task::none()       
+        },
+        Message::LeaveLobbyButtonPressed => {
+            leave_lobby(state);
+            
+            Task::none()
         },
     }
 }
 
 fn view(state: &State) -> Element<Message> {
-    let tab_bar: Element<Message> = Tabs::new(Message::TabSelected)
-        .tab_bar_position(TabBarPosition::Top)
-        .push(
-            TabId::Host,
-            TabLabel::Text("Host".to_string()),
-            Space::with_width(0.0)
-        )
-        // .push(
-        //     TabId::Client,
-        //     TabLabel::Text("Client".to_string()),
-        //     Space::with_width(0.0)
-        // )
-        .set_active_tab(&TabId::from_screen(&state.screen))
-        .tab_bar_height(Length::Shrink)
+    let max_member_possible_values = [1, 2, 3, 4, 5, 6, 7, 8];
+    let lobby_type_possible_values = [settings::LobbyType::FriendsOnly, settings::LobbyType::Private];
+    let lobby_creation_view: Element<Message> = 
+    container(
+        row![
+            pick_list(
+                max_member_possible_values,
+                Some(state.max_members),
+                Message::MaxPlayersChanged,
+            ),
+            pick_list(
+                lobby_type_possible_values,
+                Some(state.lobby_type),
+                Message::LobbyTypeChanged,
+            ),
+            Button::new(Text::new("Create Lobby").center().align_x(Horizontal::Center))
+                .on_press(Message::CreateLobbyButtonPressed),
+        ]
+    )
         .into();
     
     let client_view: Element<Message> =
@@ -449,11 +402,20 @@ fn view(state: &State) -> Element<Message> {
         Screen::Host(host) => {
             if host.listen_socket.is_some() {
                 return column![
+                    row![
+                        button("Close Lobby").on_press(Message::LeaveLobbyButtonPressed).padding(8),
+                        container(text("Connected clients:").size(16)).padding(8),
+                        Scrollable::new(Column::from_vec(state.peers.iter()
+                            .map(|peer| {
+                                Text::new(format!("{}", peer.1.name)).size(16).into()
+                            }).collect::<Vec<Element<Message>>>()).spacing(12).padding(8)
+                        ).direction(scrollable::Direction::Horizontal(Scrollbar::new())).anchor_bottom().width(Length::Fill),
+                    ],
                     host.view().map(Message::Host)
             ].into();
             }
             column![
-                tab_bar,
+                lobby_creation_view,
                 host.view().map(Message::Host)
             ].into()
         },
@@ -465,8 +427,10 @@ fn view(state: &State) -> Element<Message> {
     }
 }
 
-fn transition_to_host(state: &mut State) {
+fn disconnect(state: &mut State, net_connection_end: NetConnectionEnd) {
     if let Screen::Client(client) = &mut state.screen {
+        let net_connection = client.net_connection.take();
+        net_connection.expect("net_connection should exist when trying to close it").close(net_connection_end, None, false);
         client.net_connection.take();
         client.sink.stop();
     }
@@ -475,4 +439,15 @@ fn transition_to_host(state: &mut State) {
     let host = host::host::Host::new(settings);
     state.lobby_id = None;
     state.screen = Screen::Host(host);
+}
+
+fn leave_lobby(state: &mut State) {
+    if let Some(lobby_id) = state.lobby_id {
+        state.matchmaking.leave_lobby(lobby_id);
+        state.lobby_id = None;
+        state.peers.clear();
+        if let Screen::Host(host) = &mut state.screen {
+            host.listen_socket = None;
+        }
+    }
 }

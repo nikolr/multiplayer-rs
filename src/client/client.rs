@@ -1,12 +1,10 @@
-use iced::alignment::{Horizontal, Vertical};
-use iced::widget::{column, container, Button, Column, Container, Row, Text, TextInput};
-use iced::{Alignment, Element, Event, Length, Subscription, Task};
+use iced::Task;
 use opus::Channels::Stereo;
 use rodio::buffer::SamplesBuffer;
 use rodio::OutputStream;
-use serde::{Deserialize, Serialize};
 use steamworks::networking_sockets::NetConnection;
-use steamworks::networking_types::NetworkingConnectionState;
+use steamworks::networking_types::{NetConnectionEnd, NetworkingConnectionState};
+use crate::{host, settings, Message, Screen, State};
 
 const SERVER_PORT: u16 = 9475;
 
@@ -17,11 +15,6 @@ pub struct Client {
     pub sink: rodio::Sink,
     pub net_connection: Option<NetConnection>,
 }   
-
-#[derive(Debug, Clone)]
-pub enum Message {
-    DisconnectPressed,
-}
 
 impl Client {
     pub fn new(net_connection: NetConnection) -> Self {
