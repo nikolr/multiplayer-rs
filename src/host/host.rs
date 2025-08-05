@@ -94,7 +94,6 @@ impl Host {
             std::sync::mpsc::Sender<Vec<u8>>,
             std::sync::mpsc::Receiver<Vec<u8>>,
         ) = std::sync::mpsc::channel();
-        let tx_capt_clone = tx_capt.clone();
 
         let (tx_cancel, rx_cancel) = std::sync::mpsc::channel();
 
